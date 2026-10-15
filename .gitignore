@@ -28,6 +28,10 @@ MEMORY.md
 # Semua isi folder data (runtime)
 data/
 
+# Log auto-deploy
+deploy.log
+setup_cron.sh
+
 # ============================================================
 #  Python
 # ============================================================
