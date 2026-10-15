@@ -1,16 +1,16 @@
 services:
-  bot:
+  radio:
     build: .
-    container_name: spotify-tg-bot
+    container_name: radio-stream-ai
     restart: unless-stopped
     env_file:
       - .env
     volumes:
       - ./data:/app/data
+      - ./bin:/app/bin
     ports:
-      # hanya expose ke LAN/WSL, dipakai untuk healthcheck & login OAuth sekali.
-      - "8888:8888"   # OAuth callback (bisa dimatikan setelah login)
-      - "8080:8080"   # /healthz untuk watchdog host (nanti)
+      - "8000:8000"   # Web Player (HLS) & REST API
+      - "8080:8080"   # /healthz endpoint
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
       interval: 30s

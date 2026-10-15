@@ -11,13 +11,18 @@ from threading import Thread
 from telegram import Bot, BotCommand
 from telegram.ext import Application, CommandHandler
 
+from .audio_engine import AudioEngine
 from .config import load_settings
 from .device_watchdog import DeviceWatchdog
+from .downloader import YouTubeDownloader
 from .handlers import Handlers
 from .llm import LLMClient
 from .memory import MemoryStore
 from .queue_store import QueueStore
 from .spotify_client import SpotifyClient
+from .stream_watchdog import StreamWatchdog
+from .tts import PiperTTS
+from .web_server import RadioWebServer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,22 +32,15 @@ log = logging.getLogger("main")
 
 _state: dict = {"ready": False, "device_online": False, "device_name": ""}
 
-# Daftar command untuk menu autocomplete "/" di Telegram.
 BOT_COMMANDS = [
-    BotCommand("search", "Cari lagu (5 hasil)"),
-    BotCommand("queue", "Tambah lagu ke queue"),
-    BotCommand("list", "Lihat isi queue"),
-    BotCommand("remove", "Hapus lagu dari queue (nomor)"),
-    BotCommand("now", "Lagu yang sedang diputar"),
-    BotCommand("next", "Lagu berikutnya"),
-    BotCommand("pause", "Jeda"),
-    BotCommand("resume", "Lanjut"),
-    BotCommand("device", "Status device pemutar"),
-    BotCommand("status", "Ringkasan bot"),
-    BotCommand("clearqueue", "Kosongkan queue"),
-    BotCommand("ask", "Tanya asisten AI (bahasa natural)"),
-    BotCommand("routines", "Daftar routine tersimpan"),
-    BotCommand("routine", "Putar routine tersimpan"),
+    BotCommand("request", "Request lagu (judul atau URL YouTube)"),
+    BotCommand("salam", "Request + titip salam (judul | salam)"),
+    BotCommand("now", "Lagu & status siaran saat ini"),
+    BotCommand("list", "Lihat antrian lagu"),
+    BotCommand("remove", "Hapus lagu dari antrian"),
+    BotCommand("ask", "Ngobrol atau request lewat AI"),
+    BotCommand("status", "Status siaran radio"),
+    BotCommand("search", "Cari lagu"),
     BotCommand("help", "Bantuan"),
 ]
 
@@ -113,33 +111,138 @@ async def _post_shutdown(app: Application) -> None:
     log.info("Bot berhenti.")
 
 
+async def _broadcast_loop(
+    settings,
+    audio_engine: AudioEngine,
+    queue_store: QueueStore,
+    downloader: YouTubeDownloader,
+    llm: LLMClient,
+    tts: PiperTTS,
+) -> None:
+    """Loop penyiaran background berkelanjutan."""
+    log.info("Memulai background loop siaran radio...")
+    song_counter = 0
+
+    while True:
+        try:
+            item = queue_store.pop_next()
+            if not item:
+                # Antrian kosong: jeda singkat sebelum mengecek lagi
+                await asyncio.sleep(2)
+                continue
+
+            song_counter += 1
+            log.info(f"Memproses lagu #{item.id}: {item.title} - {item.artist}")
+
+            # 1. Download & pastikan audio track tersedia
+            music_file = Path(item.local_path) if item.local_path else None
+            if not music_file or not music_file.is_file():
+                if item.source_type == "youtube" and downloader.is_available():
+                    try:
+                        meta = downloader.resolve_query(item.source_url or item.title)
+                        music_file = downloader.download_audio(meta)
+                        queue_store.update_item(item.id, local_path=str(music_file))
+                    except Exception as e:
+                        log.error(f"Gagal mengunduh audio #{item.id}: {e}")
+                        queue_store.update_item(item.id, status="error")
+                        continue
+
+            if not music_file or not music_file.is_file():
+                log.warning(f"File audio tidak tersedia untuk item #{item.id}, melewati...")
+                queue_store.update_item(item.id, status="error")
+                continue
+
+            # 2. AI Host: Naskah + TTS (jika aktif)
+            voice_file = None
+            should_host_speak = False
+
+            if settings.host_enabled:
+                if settings.host_mode == "every_song":
+                    should_host_speak = True
+                elif settings.host_mode == "interval":
+                    should_host_speak = (song_counter % max(1, settings.host_interval_songs) == 0)
+                elif settings.host_mode == "request_only":
+                    should_host_speak = bool(item.shoutout_message)
+
+            if should_host_speak:
+                try:
+                    script = await llm.generate_dj_script(
+                        current_title=item.title,
+                        current_artist=item.artist,
+                        requested_by=item.requested_by,
+                        shoutout_message=item.shoutout_message,
+                    )
+                    if script and tts.is_available():
+                        voice_file = tts.synthesize(script)
+                        queue_store.update_item(item.id, shoutout_audio_path=str(voice_file))
+                except Exception as e:
+                    log.warning(f"AI Host pipeline fallback (play musik saja): {e}")
+
+            # 3. Putar di AudioEngine (blocking di worker thread)
+            if audio_engine.is_available():
+                await asyncio.to_thread(
+                    audio_engine.play_track_sync,
+                    music_file=music_file,
+                    voice_file=voice_file,
+                    title=item.title,
+                    artist=item.artist,
+                    shoutout=item.shoutout_message,
+                )
+            else:
+                log.warning("FFmpeg tidak tersedia; simulasi jeda pemutaran.")
+                await asyncio.sleep(5)
+
+            queue_store.update_item(item.id, status="played")
+
+        except asyncio.CancelledError:
+            log.info("Broadcast loop dihentikan.")
+            break
+        except Exception as e:
+            log.error(f"Error pada broadcast loop: {e}", exc_info=True)
+            await asyncio.sleep(3)
+
+
 def main() -> None:
     settings = load_settings()
     settings.data_dir.mkdir(parents=True, exist_ok=True)
+    settings.tracks_dir.mkdir(parents=True, exist_ok=True)
+    settings.voice_dir.mkdir(parents=True, exist_ok=True)
+    settings.hls_dir.mkdir(parents=True, exist_ok=True)
 
-    skip_spotify = os.getenv("SKIP_SPOTIFY", "").strip() in ("1", "true", "yes")
-    spotify = SpotifyClient(settings)
-    if skip_spotify:
-        log.warning("SKIP_SPOTIFY aktif: token Spotify tidak dimuat (mode smoke test).")
-    else:
-        spotify.load_token()
-
+    # Inisialisasi komponen inti radio
     queue = QueueStore(settings.db_path)
     memory = MemoryStore(settings.memory_dir)
-
-    # LLM (OpenRouter) - opsional
+    downloader = YouTubeDownloader(settings)
+    audio_engine = AudioEngine(settings)
     llm = LLMClient(settings)
-    if llm.enabled:
-        log.info("LLM aktif: model=%s", settings.openrouter_model)
-    else:
-        log.info("LLM nonaktif (OPENROUTER_API_KEY kosong).")
+    tts = PiperTTS(settings)
 
-    # Bot instance dipakai watchdog untuk notif (diisi ulang di post_init)
-    bot = Bot(token=settings.telegram_bot_token)
-    watchdog = DeviceWatchdog(settings, spotify, bot)
+    # Inisialisasi & jalankan Web Server
+    web_server = RadioWebServer(settings, audio_engine, queue, downloader)
+    web_server.start()
 
+    # Jalankan Health check HTTP lama
     start_health_server(settings.health_port)
 
+    # Spotify (mode kompatibilitas)
+    spotify = SpotifyClient(settings)
+    watchdog = None
+    if settings.music_source == "spotify":
+        spotify.load_token()
+        watchdog = DeviceWatchdog(settings, spotify)
+
+    # Setup handlers
+    h = Handlers(settings, spotify, queue, watchdog, llm=llm, memory=memory)
+    h.set_radio_components(audio_engine, downloader)
+
+    if not settings.telegram_enabled or not settings.telegram_bot_token:
+        log.info("Telegram bot dinonaktifkan / token kosong. Menjalankan broadcast & web player saja...")
+        asyncio.run(
+            _broadcast_loop(settings, audio_engine, queue, downloader, llm, tts)
+        )
+        return
+
+    # Inisialisasi Telegram Bot Application
     app = (
         Application.builder()
         .token(settings.telegram_bot_token)
@@ -152,68 +255,35 @@ def main() -> None:
     app.bot_data["queue"] = queue
     app.bot_data["watchdog"] = watchdog
     app.bot_data["llm"] = llm
+    app.bot_data["audio_engine"] = audio_engine
 
-    h = Handlers(settings, spotify, queue, watchdog, llm=llm, memory=memory)
+    # Register command handlers
     app.add_handler(CommandHandler(["start", "help"], h.cmd_start))
     app.add_handler(CommandHandler("status", h.cmd_status))
-    app.add_handler(CommandHandler("device", h.cmd_device))
-    app.add_handler(CommandHandler("search", h.cmd_search))
-    app.add_handler(CommandHandler(["queue", "q"], h.cmd_queue))
+    app.add_handler(CommandHandler(["request", "queue", "q"], h.cmd_queue))
+    app.add_handler(CommandHandler("salam", h.cmd_salam))
     app.add_handler(CommandHandler("list", h.cmd_list))
     app.add_handler(CommandHandler("remove", h.cmd_remove))
     app.add_handler(CommandHandler("now", h.cmd_now))
-    app.add_handler(CommandHandler("next", h.cmd_next))
-    app.add_handler(CommandHandler("pause", h.cmd_pause))
-    app.add_handler(CommandHandler("resume", h.cmd_resume))
-    app.add_handler(CommandHandler("clearqueue", h.cmd_clearqueue))
     app.add_handler(CommandHandler("ask", h.cmd_ask))
-    app.add_handler(CommandHandler("routines", h.cmd_routines))
-    app.add_handler(CommandHandler("routine", h.cmd_routine))
     app.add_handler(CommandHandler("whoami", h.cmd_whoami))
 
-    # log tiap update masuk (bantu debug, termasuk pesan grup)
-    async def _log_update(update, ctx):
-        chat = update.effective_chat
-        user = update.effective_user
-        text = update.effective_message.text if update.effective_message else None
-        log.info(
-            "UPDATE chat=%s(%s) user=%s text=%r",
-            chat.id if chat else None,
-            chat.type if chat else None,
-            user.id if user else None,
-            text,
-        )
-
+    # Natural language message handler
     from telegram.ext import MessageHandler, filters
-
-    app.add_handler(MessageHandler(filters.ALL, _log_update), group=10)
-
-    # pesan teks biasa (bukan command) -> LLM dengan tool calling
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, h.cmd_ask), group=11
     )
 
-    # log kalau bot di-add/kick dari grup
-    async def _log_member(update, ctx):
-        m = update.my_chat_member
-        if m is None:
-            return
-        log.info(
-            "CHAT_MEMBER chat=%s(%s) status=%s oleh=%s",
-            m.chat.id,
-            m.chat.type,
-            m.new_chat_member.status if m.new_chat_member else "?",
-            m.from_user.id if m.from_user else "?",
+    # Mulai broadcast background task saat startup bot
+    async def _start_broadcast_task(application: Application):
+        application.bot_data["broadcast_task"] = asyncio.create_task(
+            _broadcast_loop(settings, audio_engine, queue, downloader, llm, tts)
         )
 
-    from telegram.ext import ChatMemberHandler
+    app.post_init = _start_broadcast_task
 
-    app.add_handler(ChatMemberHandler(_log_member, ChatMemberHandler.MY_CHAT_MEMBER))
-
-    log.info("Menjalankan bot (long polling)...")
-    app.run_polling(
-        allowed_updates=["message", "my_chat_member", "edited_message"]
-    )
+    log.info("Menjalankan Radio Stream AI bot + broadcast engine...")
+    app.run_polling(allowed_updates=["message", "my_chat_member", "edited_message"])
 
 
 if __name__ == "__main__":

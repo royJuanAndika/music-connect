@@ -1,0 +1,51 @@
+schema: spec-driven
+
+# Project context (shown to AI when creating artifacts)
+context: |
+  Project: Radio Stream AI (evolusi dari repo "music-connect").
+
+  Sistem siaran radio live (broadcast) berbasis web dan Telegram:
+  - Semua pendengar (>10) mendengar audio SINKRON pada waktu yang sama (bukan playlist on-demand).
+  - Sumber musik DEFAULT = YouTube murni via yt-dlp (URL langsung, teks pencarian, atau cache lokal).
+  - AI Host (penyiar otomatis): LLM menyusun naskah siaran, Piper TTS (lokal) merender suara,
+    lalu FFmpeg mencampurnya ke musik dengan dynamic ducking (sidechaincompress).
+  - Output siaran: HLS (.m3u8) untuk Web Player + opsi RTMP untuk Telegram Channel Live.
+
+  Tech stack:
+  - Python 3.12, asyncio, dataclasses, type hints.
+  - FFmpeg (mixing, ducking, HLS segmentation, RTMP).
+  - yt-dlp (audio fetch & cache, format Opus/M4A).
+  - Piper TTS (binary lokal, model Bahasa Indonesia).
+  - LLM via OpenRouter/Ollama (tool calling + DJ script generation).
+  - SQLite untuk queue & status request (QueueStore).
+  - python-telegram-bot untuk bot Telegram.
+  - Web server async untuk hls.js player + REST API.
+
+  Konvensi penting:
+  - Config-driven: SEMUA perilaku runtime diatur lewat environment variable (.env + app/config.py).
+  - Default full-YouTube: MUSIC_SOURCE=youtube. Spotify resolver hanya opsional.
+  - Binary portable (yt-dlp, ffmpeg, piper) di folder bin/ atau via env path.
+  - Kode modular, terse, minim boilerplate; jangan tambah abstraksi berlebihan.
+  - SQLite: parameterized query + lock (thread-safe).
+
+# Per-artifact rules (optional)
+rules:
+  proposal:
+    - Selalu sertakan bagian "Non-goals" (apa yang TIDAK dikerjakan).
+    - Sebutkan dengan jelas mana bagian dari repo lama yang dipertahankan vs diubah vs baru.
+  design:
+    - Selalu sertakan diagram alur audio (music + voice -> ducking -> HLS/RTMP).
+    - Sebutkan env var baru yang relevan beserta nilai default-nya.
+  tasks:
+    - "Pecah task per modul file (mis. app/downloader.py, app/tts.py, app/audio_engine.py)."
+    - "Sertakan langkah verifikasi/uji untuk tiap task yang menyentuh audio pipeline."
+
+# Per-operation guidance (optional)
+operations:
+  apply:
+    guidance:
+      - Jaga agar pipeline audio tetap bisa fallback ke musik saja bila AI host mati.
+      - Ringkas hasil perubahan tiap modul secara singkat.
+  archive:
+    guidance:
+      - Rangkum outcome arsip dan spec yang berubah sebelum selesai.

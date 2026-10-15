@@ -12,7 +12,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from telegram import Bot
+try:
+    from telegram import Bot
+except ImportError:
+    Bot = None  # type: ignore
 
 from .config import Settings
 from .spotify_client import SpotifyClient, SpotifyError

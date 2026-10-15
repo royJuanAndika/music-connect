@@ -6,13 +6,19 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt yt-dlp
 
 COPY app ./app
+COPY web ./web
 
-# health endpoint + data volume
-EXPOSE 8080
+# Port Web Player (8000) & Healthcheck (8080)
+EXPOSE 8000 8080
 VOLUME ["/app/data"]
 
 CMD ["python", "-m", "app.main"]

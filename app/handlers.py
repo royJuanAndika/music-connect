@@ -100,6 +100,12 @@ class Handlers:
         self.watchdog = watchdog
         self.llm = llm  # LLMClient | None
         self.memory = memory  # MemoryStore | None
+        self.audio_engine = None  # AudioEngine | None
+        self.downloader = None  # YouTubeDownloader | None
+
+    def set_radio_components(self, audio_engine, downloader) -> None:
+        self.audio_engine = audio_engine
+        self.downloader = downloader
 
     # ---- guard ----
     def _allowed(self, update: Update) -> bool:
@@ -257,7 +263,57 @@ class Handlers:
         title = track["name"]
         uri = track["uri"]
 
-        # simpan ke queue lokal
+        # Simpan ke queue
+        if self.settings.music_source == "youtube":
+            from .downloader import DownloaderError
+            from .queue_store import QueueValidationError
+
+            text_check = query
+            try:
+                self.queue.check_moderation_and_quota(
+                    requested_by=who,
+                    text_to_check=text_check,
+                    banned_words=self.settings.banned_words,
+                    max_user_quota=self.settings.max_queue_per_user,
+                    max_total_quota=self.settings.max_queue_total,
+                    cooldown_sec=self.settings.request_cooldown_sec,
+                )
+            except QueueValidationError as e:
+                return await update.message.reply_text(f"⚠️ {e}")
+
+            title = query
+            artist = "YouTube"
+            uri = f"query:{query}"
+            source_url = ""
+
+            if self.downloader and self.downloader.is_available():
+                try:
+                    meta = self.downloader.resolve_query(query)
+                    title = meta.title
+                    artist = meta.uploader
+                    uri = f"yt:{meta.video_id}"
+                    source_url = meta.webpage_url
+                except DownloaderError as e:
+                    return await update.message.reply_text(f"⚠️ Gagal resolusi YouTube: {e}")
+
+            self.queue.add(
+                chat_id=update.effective_chat.id,
+                track_uri=uri,
+                title=title,
+                artist=artist,
+                duration_ms=0,
+                requested_by=who,
+                source_type="youtube",
+                source_url=source_url,
+            )
+            pos = self.queue.count(status="pending")
+            return await update.message.reply_text(
+                f"📻 Ditambahkan ke siaran radio: *{_escape(title)}* — {_escape(artist)}\n"
+                f"Posisi queue: {pos}",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        # simpan ke queue lokal (Spotify)
         self.queue.add(
             chat_id=update.effective_chat.id,
             track_uri=uri,
@@ -348,9 +404,101 @@ class Handlers:
         await update.message.reply_text("\n".join(reply), parse_mode=ParseMode.MARKDOWN)
 
     @_cmd
+    async def cmd_salam(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Kirim request dengan titip salam: /salam <judul> | <pesan salam>"""
+        if not self._allowed(update):
+            return await self._deny(update)
+
+        raw = " ".join(ctx.args).strip()
+        if not raw or "|" not in raw:
+            return await update.message.reply_text(
+                "Format salah. Gunakan: `/salam <judul lagu> | <pesan titip salam>`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        query, shoutout = [p.strip() for p in raw.split("|", 1)]
+        if not query:
+            return await update.message.reply_text("Judul lagu tidak boleh kosong.")
+
+        if len(shoutout) > self.settings.shoutout_max_chars:
+            return await update.message.reply_text(
+                f"Pesan salam terlalu panjang. Maksimal {self.settings.shoutout_max_chars} karakter."
+            )
+
+        who = (
+            f"@{update.effective_user.username}"
+            if update.effective_user and update.effective_user.username
+            else (update.effective_user.first_name if update.effective_user else "Anonim")
+        )
+
+        from .downloader import DownloaderError
+        from .queue_store import QueueValidationError
+
+        text_check = f"{query} {shoutout}"
+        try:
+            self.queue.check_moderation_and_quota(
+                requested_by=who,
+                text_to_check=text_check,
+                banned_words=self.settings.banned_words,
+                max_user_quota=self.settings.max_queue_per_user,
+                max_total_quota=self.settings.max_queue_total,
+                cooldown_sec=self.settings.request_cooldown_sec,
+            )
+        except QueueValidationError as e:
+            return await update.message.reply_text(f"⚠️ {e}")
+
+        title = query
+        artist = "YouTube"
+        uri = f"query:{query}"
+        source_url = ""
+
+        if self.downloader and self.downloader.is_available():
+            try:
+                meta = self.downloader.resolve_query(query)
+                title = meta.title
+                artist = meta.uploader
+                uri = f"yt:{meta.video_id}"
+                source_url = meta.webpage_url
+            except DownloaderError as e:
+                return await update.message.reply_text(f"⚠️ Gagal resolusi YouTube: {e}")
+
+        self.queue.add(
+            chat_id=update.effective_chat.id,
+            track_uri=uri,
+            title=title,
+            artist=artist,
+            duration_ms=0,
+            requested_by=who,
+            source_type="youtube",
+            source_url=source_url,
+            shoutout_message=shoutout,
+        )
+        pos = self.queue.count(status="pending")
+        await update.message.reply_text(
+            f"📻 Request & Salam diterima!\n"
+            f"Lagu: *{_escape(title)}* — {_escape(artist)}\n"
+            f"Salam: \"_{_escape(shoutout)}_\"\n"
+            f"Posisi queue: {pos}",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+    @_cmd
     async def cmd_now(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
             return await self._deny(update)
+
+        if self.settings.music_source == "youtube" and self.audio_engine:
+            st = self.audio_engine.state
+            status_text = "🟢 Sedang Mengudara" if st.is_running else "⚪ Menunggu Siaran"
+            host_text = "\n🎙️ *Host AI:* Sedang bicara" if st.is_host_speaking else ""
+            shout_text = f"\n💌 *Salam:* \"_{_escape(st.current_shoutout)}_\"" if st.current_shoutout else ""
+            return await update.message.reply_text(
+                f"*Status Radio:* {status_text}\n"
+                f"*Lagu:* {_escape(st.current_title)} — {_escape(st.current_artist)}"
+                f"{host_text}{shout_text}",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
         try:
             playing = await _to_thread(self.spotify.get_currently_playing)
         except SpotifyError as exc:

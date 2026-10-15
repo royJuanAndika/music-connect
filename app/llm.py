@@ -10,7 +10,10 @@ import asyncio
 import json
 import logging
 
-import httpx
+try:
+    import httpx
+except ImportError:
+    httpx = None  # type: ignore
 
 from .config import Settings
 from .tools import TOOLS_BY_NAME, ToolContext, openai_tool_schemas
@@ -58,7 +61,7 @@ class LLMError(RuntimeError):
 class LLMClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._client = httpx.AsyncClient(timeout=45.0)
+        self._client = httpx.AsyncClient(timeout=45.0) if httpx else None
 
     @property
     def enabled(self) -> bool:
@@ -149,6 +152,52 @@ class LLMClient:
         if tool_calls:
             message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
         return message
+
+    async def generate_dj_script(
+        self,
+        current_title: str,
+        current_artist: str,
+        requested_by: str = "",
+        shoutout_message: str = "",
+        time_context: str = "",
+    ) -> str:
+        """Susun naskah siaran penyiar radio FM otomatis untuk lagu berikutnya."""
+        if not self.enabled:
+            return ""
+
+        persona = self.settings.host_persona
+        max_chars = self.settings.host_max_chars
+
+        prompt = (
+            f"Kamu adalah Host Radio AI. Persona: {persona}.\n"
+            f"Waktu siaran: {time_context or 'Sekarang'}.\n"
+            f"Lagu berikutnya yang akan diputar: {current_title} oleh {current_artist}.\n"
+        )
+        if requested_by:
+            prompt += f"Lagu ini di-request oleh: {requested_by}.\n"
+        if shoutout_message:
+            prompt += f"Pesan titip salam dari pendengar: \"{shoutout_message}\".\n"
+
+        prompt += (
+            f"\nTUGAS: Buat naskah siaran pendek (intro/salam) dalam Bahasa Indonesia yang santai, "
+            f"ramah, dan natural layaknya penyiar radio FM. Bacakan salamnya jika ada. "
+            f"Maksimal {max_chars} karakter. HANYA keluarkan naskah ucapan tanpa tanda petik pembuka/penutup."
+        )
+
+        messages = [
+            {"role": "system", "content": "Kamu adalah Host Radio AI profesional berbahasa Indonesia."},
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            msg = await self._chat(messages, tools=[])
+            script = msg.get("content", "").strip().strip('"\'')
+            if len(script) > max_chars:
+                script = script[:max_chars].rsplit(" ", 1)[0] + "..."
+            return script
+        except Exception as e:
+            log.warning(f"Gagal generate naskah DJ: {e}")
+            return ""
 
     async def run(
         self,
