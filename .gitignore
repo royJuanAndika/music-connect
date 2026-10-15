@@ -1,0 +1,56 @@
+# ============================================================
+#  Secrets & data runtime  (JANGAN PERNAH di-commit)
+# ============================================================
+.env
+.env.*
+!.env.example
+*.env
+
+# Spotify token
+token.json
+data/token.json
+**/token.json
+
+# Database queue
+*.db
+*.sqlite
+*.sqlite3
+data/queue.db
+**/queue.db
+
+# Memory / catatan pribadi
+data/memory/
+memory/
+notes/
+MEMORY.md
+**/MEMORY.md
+
+# Semua isi folder data (runtime)
+data/
+
+# ============================================================
+#  Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ============================================================
+#  Editor / OS
+# ============================================================
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
