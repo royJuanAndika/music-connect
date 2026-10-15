@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Syntax / import check
+        env:
+          TELEGRAM_BOT_TOKEN: "1:dummy"
+          SPOTIFY_CLIENT_ID: "dummy"
+          SPOTIFY_CLIENT_SECRET: "dummy"
+          DATA_DIR: "/tmp/data"
+        run: |
+          python -m compileall app
+          python -c "import app.config, app.spotify_client, app.queue_store, app.device_watchdog, app.handlers, app.llm, app.memory, app.tools, app.main; print('IMPORT_OK')"
+
+      - name: Build Docker image
+        run: docker build -t music-connect:ci .
