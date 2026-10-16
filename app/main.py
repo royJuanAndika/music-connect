@@ -98,15 +98,18 @@ async def _post_init(app: Application) -> None:
 
 
 async def _post_shutdown(app: Application) -> None:
-    watchdog: DeviceWatchdog = app.bot_data["watchdog"]
-    spotify: SpotifyClient = app.bot_data["spotify"]
-    llm: LLMClient = app.bot_data["llm"]
-    task = app.bot_data.get("state_sync_task")
+    watchdog = app.bot_data.get("watchdog")
+    spotify = app.bot_data.get("spotify")
+    llm = app.bot_data.get("llm")
+    task = app.bot_data.get("broadcast_task")
     if task:
         task.cancel()
-    await watchdog.stop()
-    spotify.close()
-    await llm.close()
+    if watchdog:
+        await watchdog.stop()
+    if spotify:
+        spotify.close()
+    if llm and hasattr(llm, "close"):
+        await llm.close()
     _state["ready"] = False
     log.info("Bot berhenti.")
 
@@ -279,6 +282,13 @@ def main() -> None:
         application.bot_data["broadcast_task"] = asyncio.create_task(
             _broadcast_loop(settings, audio_engine, queue, downloader, llm, tts)
         )
+        try:
+            await application.bot.set_my_commands(BOT_COMMANDS)
+            log.info("Command terdaftar (%d) untuk menu Telegram.", len(BOT_COMMANDS))
+        except Exception as exc:
+            log.warning("Gagal daftar command Telegram: %s", exc)
+        _state["ready"] = True
+        log.info("Bot siap. Long polling mulai.")
 
     app.post_init = _start_broadcast_task
 
