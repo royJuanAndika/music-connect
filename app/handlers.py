@@ -176,11 +176,46 @@ class Handlers:
                     await query.message.reply_text("Antrian lagu saat ini kosong.")
                 return
             lines = ["*Queue sekarang:*"]
+            keyboard = []
             for i, it in enumerate(items, 1):
                 lines.append(_fmt_item(i, it))
-            lines.append("\nDahulukan dengan: `/bump <nomor>`")
+                if i <= 5:
+                    short_title = it.title[:20] + "..." if len(it.title) > 23 else it.title
+                    keyboard.append([
+                        InlineKeyboardButton(f"⚡ #{i} ({short_title})", callback_data=f"act:bump:{it.id}"),
+                        InlineKeyboardButton(f"🗑️ #{i}", callback_data=f"act:del:{it.id}"),
+                    ])
+            lines.append("\n_Pilih tombol untuk mendahulukan (⚡) atau menghapus (🗑️):_")
             if query.message:
-                await query.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+                await query.message.reply_text(
+                    "\n".join(lines),
+                    reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+            return
+
+        # 3b. Action: Bump track dari tombol
+        if data.startswith("act:bump:"):
+            item_id = int(data[len("act:bump:"):])
+            ok = self.queue.bump_to_front(item_id)
+            if ok:
+                await query.answer("Lagu didahulukan ke urutan #1!")
+                if query.message:
+                    await query.message.reply_text(f"⚡ Lagu #{item_id} berhasil didahulukan oleh {who}!")
+            else:
+                await query.answer("Gagal memindahkan lagu.", show_alert=True)
+            return
+
+        # 3c. Action: Delete track dari tombol
+        if data.startswith("act:del:"):
+            item_id = int(data[len("act:del:"):])
+            ok = self.queue.remove(item_id)
+            if ok:
+                await query.answer("Lagu dihapus dari antrian!")
+                if query.message:
+                    await query.message.reply_text(f"🗑️ Lagu #{item_id} dihapus dari antrian oleh {who}.")
+            else:
+                await query.answer("Lagu tidak ditemukan / sudah terhapus.", show_alert=True)
             return
 
         # 4. Action: Queue track dari tombol search YouTube (qyt:<video_id>)
@@ -372,7 +407,7 @@ class Handlers:
                     InlineKeyboardButton(f"▶️ {i}. {short_title}", callback_data=f"qyt:{t.video_id}")
                 ])
 
-            lines.append("\n_Klik tombol di bawah atau ketik `/queue <nomor>` untuk memutar:_")
+            lines.append("\n_Klik tombol di bawah untuk langsung memutar:_")
             reply_markup = InlineKeyboardMarkup(keyboard)
             return await update.message.reply_text(
                 "\n".join(lines),
@@ -594,14 +629,25 @@ class Handlers:
     async def cmd_list(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
             return await self._deny(update)
-        items = self.queue.list(update.effective_chat.id)
+        items = self.queue.list(status="pending")
         if not items:
-            return await update.message.reply_text("Queue kosong.")
+            return await update.message.reply_text("Antrian lagu saat ini kosong.")
+
         lines = ["*Queue sekarang:*"]
+        keyboard = []
         for i, it in enumerate(items, 1):
             lines.append(_fmt_item(i, it))
-        lines.append("\nHapus dengan: `/remove <nomor>`")
-        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+            # Tambahkan tombol pintas untuk 5 antrian pertama
+            if i <= 5:
+                short_title = it.title[:20] + "..." if len(it.title) > 23 else it.title
+                keyboard.append([
+                    InlineKeyboardButton(f"⚡ Dahulukan #{i} ({short_title})", callback_data=f"act:bump:{it.id}"),
+                    InlineKeyboardButton(f"🗑️ Hapus #{i}", callback_data=f"act:del:{it.id}"),
+                ])
+
+        lines.append("\n_Gunakan tombol di bawah atau ketik `/bump <nomor>` / `/remove <nomor>`_")
+        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+        await update.message.reply_text("\n".join(lines), reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
     @_cmd
     async def cmd_remove(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
