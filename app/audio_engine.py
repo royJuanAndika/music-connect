@@ -68,28 +68,28 @@ class AudioEngine:
         output_rtmp: bool = False,
     ) -> list[str]:
         """Menyusun argumen baris perintah FFmpeg untuk mencampur audio dan menyiarkan."""
-        cmd = [self.bin_path, "-y", "-re"]
+        # Input 0: musik
+        cmd = [self.bin_path, "-y", "-re", "-i", str(music_file)]
 
-        # Input 0: Musik
-        cmd.extend(["-i", str(music_file)])
+        audio_map = "0:a"
+        filter_complex = []
 
+        # Input 1: Voice host jika ada
         if voice_file and voice_file.is_file():
-            # Input 1: Voice host
             cmd.extend(["-i", str(voice_file)])
-            cmd.extend(["-filter_complex", self.build_ducking_filter(), "-map", "[out]"])
-        else:
-            # Tanpa host: map langsung musik input 0
-            cmd.extend(["-map", "0:a"])
+            filter_complex.append(self.build_ducking_filter())
+            audio_map = "[out]"
 
-        # Audio encoder settings
-        cmd.extend([
-            "-c:a", "aac",
-            "-b:a", self.settings.stream_bitrate,
-            "-ar", str(self.settings.stream_sample_rate),
-            "-ac", str(self.settings.stream_channels),
-        ])
+        # Input 2 (atau 1 jika tanpa voice): synthetic black video untuk Telegram RTMP
+        video_input_idx = None
+        if output_rtmp and self.settings.rtmp_url:
+            video_input_idx = 2 if (voice_file and voice_file.is_file()) else 1
+            cmd.extend(["-f", "lavfi", "-re", "-i", "color=c=black:s=640x360:r=15"])
 
-        # Output HLS
+        if filter_complex:
+            cmd.extend(["-filter_complex", ";".join(filter_complex)])
+
+        # Output HLS (audio only)
         if output_hls:
             hls_dir = self.settings.hls_dir
             hls_dir.mkdir(parents=True, exist_ok=True)
@@ -97,6 +97,11 @@ class AudioEngine:
             segment_path = hls_dir / "segment_%03d.ts"
 
             cmd.extend([
+                "-map", audio_map,
+                "-c:a", "aac",
+                "-b:a", self.settings.stream_bitrate,
+                "-ar", str(self.settings.stream_sample_rate),
+                "-ac", str(self.settings.stream_channels),
                 "-f", "hls",
                 "-hls_time", str(self.settings.hls_segment_seconds),
                 "-hls_list_size", "5",
@@ -105,12 +110,28 @@ class AudioEngine:
                 str(playlist_path),
             ])
 
-        # Output RTMP opsional (Telegram Live)
+        # Output RTMP (video dummy + audio)
         if output_rtmp and self.settings.rtmp_url:
             full_rtmp = self.settings.rtmp_url
             if self.settings.rtmp_key:
                 full_rtmp = f"{self.settings.rtmp_url.rstrip('/')}/{self.settings.rtmp_key}"
-            cmd.extend(["-f", "flv", full_rtmp])
+
+            cmd.extend([
+                "-map", f"{video_input_idx}:v",
+                "-map", audio_map,
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-b:v", "200k",
+                "-pix_fmt", "yuv420p",
+                "-g", "30",
+                "-c:a", "aac",
+                "-b:a", self.settings.stream_bitrate,
+                "-ar", str(self.settings.stream_sample_rate),
+                "-ac", str(self.settings.stream_channels),
+                "-f", "flv",
+                full_rtmp,
+            ])
 
         return cmd
 
