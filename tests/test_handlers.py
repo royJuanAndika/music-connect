@@ -46,6 +46,23 @@ def test_handlers_and_tools():
     assert items[0].shoutout_message == "Salam buat keluarga di Surabaya"
     assert items[0].source_type == "youtube"
 
+    # 3. Test source_type='message' addition
+    msg_id = qs.add(
+        chat_id=123,
+        track_uri="msg:test",
+        title="📢 Pengumuman Radio",
+        artist="Admin",
+        duration_ms=0,
+        requested_by="AdminRoy",
+        source_type="message",
+        shoutout_to="Semua Pegawai",
+        shoutout_message="Jangan lupa meeting jam 2",
+    )
+    assert msg_id > 0
+    msg_item = qs.list(chat_id=123)[-1]
+    assert msg_item.source_type == "message"
+    assert msg_item.shoutout_to == "Semua Pegawai"
+
     qs.close()
     if db_path.exists():
         db_path.unlink()

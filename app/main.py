@@ -33,8 +33,10 @@ log = logging.getLogger("main")
 _state: dict = {"ready": False, "device_online": False, "device_name": ""}
 
 BOT_COMMANDS = [
+    BotCommand("search", "Cari lagu YouTube & pilih tombol"),
     BotCommand("request", "Request lagu (judul atau URL YouTube)"),
     BotCommand("salam", "Request + titip salam (judul | salam)"),
+    BotCommand("pesan", "Siarkan pesan pengumuman suara (Khusus Admin)"),
     BotCommand("skip", "Lewati lagu yang sedang diputar"),
     BotCommand("bump", "Dahulukan lagu ke urutan depan (nomor)"),
     BotCommand("now", "Lagu & sisa durasi siaran saat ini"),
@@ -140,6 +142,31 @@ async def _broadcast_loop(
 
             song_counter += 1
             log.info(f"Memproses lagu #{item.id}: {item.title} - {item.artist}")
+
+            # Penanganan Item Tipe 'message' (Pengumuman Pesan Suara Mandiri Khusus Admin)
+            if item.source_type == "message":
+                log.info(f"Memproses pengumuman suara #{item.id} dari {item.requested_by}")
+                try:
+                    script = await llm.generate_announcement_script(
+                        requested_by=item.requested_by,
+                        shoutout_to=item.shoutout_to,
+                        shoutout_message=item.shoutout_message,
+                    )
+                    voice_file = await tts.synthesize_async(script)
+                    queue_store.update_item(item.id, shoutout_audio_path=str(voice_file))
+
+                    if audio_engine.is_available():
+                        await asyncio.to_thread(
+                            audio_engine.play_message_sync,
+                            voice_file=voice_file,
+                            shoutout_to=item.shoutout_to,
+                            message=item.shoutout_message,
+                        )
+                except Exception as e:
+                    log.error(f"Gagal menyiarkan pesan #{item.id}: {e}", exc_info=True)
+                finally:
+                    queue_store.update_item(item.id, status="played")
+                continue
 
             # 1. Download & pastikan audio track tersedia
             music_file = Path(item.local_path) if item.local_path else None
@@ -279,6 +306,7 @@ def main() -> None:
     app.add_handler(CommandHandler("search", h.cmd_search))
     app.add_handler(CommandHandler(["request", "queue", "q"], h.cmd_queue))
     app.add_handler(CommandHandler("salam", h.cmd_salam))
+    app.add_handler(CommandHandler("pesan", h.cmd_pesan))
     app.add_handler(CommandHandler(["next", "skip"], h.cmd_next))
     app.add_handler(CommandHandler(["bump", "top"], h.cmd_bump))
     app.add_handler(CommandHandler("list", h.cmd_list))

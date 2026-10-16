@@ -74,6 +74,136 @@ class AudioEngine:
         )
         return filter_str
 
+    def build_message_cmd(
+        self,
+        voice_file: Path,
+        bed_file: Optional[Path] = None,
+        output_hls: bool = True,
+        output_rtmp: bool = False,
+    ) -> list[str]:
+        """Menyusun argumen FFmpeg untuk memutar pesan suara host dengan musik latar (Radio Bed) melirih."""
+        cmd = [self.bin_path, "-y", "-re"]
+
+        # Input 0: Radio Bed (file atau synthesizer halus jika file tidak ada)
+        if bed_file and bed_file.is_file():
+            cmd.extend(["-stream_loop", "-1", "-i", str(bed_file)])
+        else:
+            # Nada latar ambient sintetis harmonik (A3 + E4) yang santai
+            cmd.extend([
+                "-f", "lavfi",
+                "-i", f"sine=frequency=220:sample_rate={self.settings.stream_sample_rate},"
+                      f"volume=0.15[b1];sine=frequency=330:sample_rate={self.settings.stream_sample_rate},"
+                      f"volume=0.10[b2];[b1][b2]amix=inputs=2",
+            ])
+
+        # Input 1: Voice host
+        cmd.extend(["-i", str(voice_file)])
+
+        # Ducking filter: volume radio bed ditekan ke 0.15 saat host bicara
+        level = 0.15
+        attack = 150
+        release = 600
+        filter_complex = [
+            f"[0:a][1:a]sidechaincompress=threshold={level}:ratio=8:attack={attack}:release={release}[ducked];"
+            f"[ducked][1:a]amix=inputs=2:duration=second:dropout_transition=2[out]"
+        ]
+        cmd.extend(["-filter_complex", ";".join(filter_complex)])
+        audio_map = "[out]"
+
+        # Input 2: Dummy video track untuk RTMPS Telegram
+        if output_rtmp and self.settings.rtmp_url:
+            cmd.extend(["-f", "lavfi", "-re", "-i", "color=c=black:s=640x360:r=15"])
+
+        # Output HLS
+        if output_hls:
+            hls_dir = self.settings.hls_dir
+            hls_dir.mkdir(parents=True, exist_ok=True)
+            cmd.extend([
+                "-map", audio_map,
+                "-c:a", "aac",
+                "-b:a", self.settings.stream_bitrate,
+                "-ar", str(self.settings.stream_sample_rate),
+                "-ac", str(self.settings.stream_channels),
+                "-f", "hls",
+                "-hls_time", str(self.settings.hls_segment_seconds),
+                "-hls_list_size", "5",
+                "-hls_flags", "delete_segments+append_list",
+                "-hls_segment_filename", str(hls_dir / "segment_%03d.ts"),
+                str(hls_dir / "live.m3u8"),
+            ])
+
+        # Output RTMP
+        if output_rtmp and self.settings.rtmp_url:
+            full_rtmp = self.settings.rtmp_url
+            if self.settings.rtmp_key:
+                full_rtmp = f"{self.settings.rtmp_url.rstrip('/')}/{self.settings.rtmp_key}"
+
+            cmd.extend([
+                "-map", "2:v",
+                "-map", audio_map,
+                "-fps_mode", "cfr",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-b:v", "200k",
+                "-maxrate", "250k",
+                "-bufsize", "500k",
+                "-pix_fmt", "yuv420p",
+                "-g", "30",
+                "-keyint_min", "30",
+                "-sc_threshold", "0",
+                "-c:a", "aac",
+                "-b:a", self.settings.stream_bitrate,
+                "-ar", str(self.settings.stream_sample_rate),
+                "-ac", str(self.settings.stream_channels),
+                "-max_muxing_queue_size", "9999",
+                "-f", "flv",
+                full_rtmp,
+            ])
+
+        return cmd
+
+    def play_message_sync(
+        self,
+        voice_file: Path,
+        shoutout_to: str = "",
+        message: str = "",
+    ) -> None:
+        """Memutar pengumuman pesan suara khusus dengan latar musik lirih (blocking)."""
+        output_hls = self.settings.stream_mode in ("hls", "both")
+        output_rtmp = (
+            self.settings.stream_mode in ("rtmp", "both")
+            and bool(self.settings.rtmp_url)
+        )
+
+        bed_file = self.settings.data_dir / "radio_bed.mp3"
+        cmd = self.build_message_cmd(
+            voice_file=voice_file,
+            bed_file=bed_file if bed_file.is_file() else None,
+            output_hls=output_hls,
+            output_rtmp=output_rtmp,
+        )
+
+        self.state.is_running = True
+        self.state.current_title = "📢 Pengumuman Radio"
+        self.state.current_artist = f"Untuk: {shoutout_to}" if shoutout_to else "Pesan Siaran"
+        self.state.current_shoutout = message
+        self.state.is_host_speaking = True
+        self.state.started_at = time.time()
+        self.state.duration_sec = 0
+
+        try:
+            self._process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            self._process.communicate()
+        finally:
+            self._process = None
+            self.state.is_running = False
+            self.state.is_host_speaking = False
+
     def build_ffmpeg_cmd(
         self,
         music_file: Path,

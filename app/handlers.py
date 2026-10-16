@@ -784,6 +784,60 @@ class Handlers:
         )
 
     @_cmd
+    async def cmd_pesan(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Kirim pengumuman suara siaran mandiri (Khusus Admin):
+        Format: /pesan untuk <Target> | <Isi Pesan>
+        Atau: /pesan <Isi Pesan>
+        """
+        user = update.effective_user
+        if not user or user.id not in self.settings.allowed_telegram_ids:
+            return await update.message.reply_text(
+                "⛔ *Akses Ditolak:* Perintah siaran pengumuman mandiri (`/pesan`) hanya dapat digunakan oleh Admin.\n"
+                "Untuk pendengar, gunakan `/salam <Lagu> | <Pesan>`.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        raw = " ".join(ctx.args).strip()
+        if not raw:
+            return await update.message.reply_text(
+                "Gunakan format:\n"
+                "`/pesan untuk <Target> | <Isi Pesan>`\n"
+                "Atau: `/pesan <Isi Pesan>`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        if "|" in raw:
+            parts = [p.strip() for p in raw.split("|", 1)]
+            target_raw = parts[0]
+            shoutout = parts[1]
+            shoutout_to = target_raw[5:].strip() if target_raw.lower().startswith("untuk ") else target_raw
+        else:
+            shoutout_to = "semua pendengar"
+            shoutout = raw
+
+        who = f"@{user.username}" if user.username else (user.first_name or "Admin")
+
+        item_id = self.queue.add(
+            chat_id=update.effective_chat.id if update.effective_chat else 0,
+            track_uri=f"msg:{item_id if 'item_id' in locals() else 'announcement'}",
+            title="📢 Pengumuman Radio",
+            artist=f"Admin {who}",
+            duration_ms=0,
+            requested_by=who,
+            source_type="message",
+            shoutout_to=shoutout_to,
+            shoutout_message=shoutout,
+        )
+        pos = self.queue.count(status="pending")
+        await update.message.reply_text(
+            f"📢 *Pengumuman Admin Disiarkan!*\n"
+            f"🎯 Untuk: *{_escape(shoutout_to)}*\n"
+            f"💌 Pesan: \"_{_escape(shoutout)}_\"\n"
+            f"Penyiar AI akan membacakannya dengan musik latar di antrian #{pos}.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+    @_cmd
     async def cmd_now(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
             return await self._deny(update)

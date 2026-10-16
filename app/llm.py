@@ -153,6 +153,53 @@ class LLMClient:
             message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
         return message
 
+    async def generate_announcement_script(
+        self,
+        requested_by: str = "Admin",
+        shoutout_to: str = "semua pendengar",
+        shoutout_message: str = "",
+    ) -> str:
+        """Susun naskah pengumuman radio FM mandiri (pesan saja) dengan fallback template bawaan."""
+        max_chars = self.settings.host_max_chars
+
+        # Template fallback radio FM jika LLM offline / tanpa API key
+        target_text = f"khusus buat {shoutout_to}" if shoutout_to and shoutout_to.lower() != "semua pendengar" else "buat kawan-kawan semua"
+        fallback_script = (
+            f"Halo sobat radio yang lagi standby! Ada pesan spesial nih dari {requested_by} {target_text}: "
+            f"'{shoutout_message}'. Sekian pengumuman dari kami, tetap nikmati alunan musik di radio kesayangan kamu!"
+        )
+
+        if not self.enabled:
+            return fallback_script[:max_chars]
+
+        persona = self.settings.host_persona
+        prompt = (
+            f"Kamu adalah Penyiar Radio FM bernama DJ Connect. Persona: {persona}.\n"
+            f"Ada pengumuman / pesan siaran masuk dari: {requested_by}.\n"
+            f"Ditujukan untuk: {shoutout_to}.\n"
+            f"Isi pengumuman: \"{shoutout_message}\".\n\n"
+            f"TUGAS:\n"
+            f"Buat naskah penyiar radio FM yang luwes, akrab, dan santai untuk membacakan pesan tersebut "
+            f"sebagai selingan siaran (intermezzo). Maksimal {max_chars} karakter tanpa tanda petik."
+        )
+
+        messages = [
+            {"role": "system", "content": "Kamu adalah Penyiar Radio FM Indonesia yang ramah dan akrab."},
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            msg = await self._chat(messages, tools=[])
+            script = msg.get("content", "").strip().strip('"\'')
+            if script:
+                if len(script) > max_chars:
+                    script = script[:max_chars].rsplit(" ", 1)[0] + "..."
+                return script
+        except Exception as e:
+            log.warning(f"Gagal generate naskah pengumuman via LLM ({e}), menggunakan fallback template.")
+
+        return fallback_script[:max_chars]
+
     async def generate_dj_script(
         self,
         current_title: str,
@@ -163,11 +210,18 @@ class LLMClient:
         time_context: str = "",
     ) -> str:
         """Susun naskah siaran penyiar radio FM otomatis untuk lagu berikutnya."""
-        if not self.enabled:
-            return ""
-
         persona = self.settings.host_persona
         max_chars = self.settings.host_max_chars
+
+        # Fallback template lokal jika LLM nonaktif / tanpa API key
+        if not self.enabled:
+            target_str = f"khusus buat {shoutout_to}, " if shoutout_to and shoutout_to.lower() != "semua pendengar" else ""
+            msg_str = f"pesannya: '{shoutout_message}'. " if shoutout_message else ""
+            req_str = f"request dari {requested_by}. " if requested_by else ""
+            return (
+                f"Halo sobat radio! Berikutnya kita puterin {current_title} oleh {current_artist}, "
+                f"{req_str}{target_str}{msg_str}Selamat mendengarkan!"
+            )[:max_chars]
 
         prompt = (
             f"Kamu adalah Penyiar Radio FM anak muda profesional bernama DJ Connect. Persona: {persona}.\n"
