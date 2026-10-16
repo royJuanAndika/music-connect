@@ -52,6 +52,7 @@ def test_audio_engine():
     assert "-f flv rtmp://live.telegram.org/app/secretkey123" in cmd_str
     assert "-max_muxing_queue_size 9999" in cmd_str
     assert "-fps_mode cfr" in cmd_str
+    assert "asplit=2[out_hls][out_rtmp]" in cmd_str
 
     # Test standby command
     standby_cmd = engine.build_standby_cmd(10, output_hls=True, output_rtmp=True)

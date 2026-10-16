@@ -55,7 +55,12 @@ class YouTubeDownloader:
         return info.is_available
 
     def _build_base_cmd(self) -> list[str]:
-        cmd = [self.bin_path, "--no-warnings", "--no-check-certificates"]
+        cmd = [
+            self.bin_path,
+            "--no-warnings",
+            "--no-check-certificates",
+            "--extractor-args", "youtube:player_client=android,web",
+        ]
         if self.settings.yt_cookies_file:
             cmd.extend(["--cookies", self.settings.yt_cookies_file])
         if self.settings.yt_proxy:

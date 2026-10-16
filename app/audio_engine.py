@@ -61,16 +61,16 @@ class AudioEngine:
         
         [0:a] adalah musik, [1:a] adalah suara host.
         Ketika suara host masuk, musik ditekan otomatis ke level ducking.
+        Gunakan asplit=2 agar output stream bisa dipakai bersama oleh HLS dan RTMP.
         """
         level = self.settings.duck_level
         attack = self.settings.duck_attack_ms
         release = self.settings.duck_release_ms
 
-        # sidechaincompress: threshold=0.125, ratio=4, attack, release
         filter_str = (
             f"[0:a][1:a]sidechaincompress="
             f"threshold={level}:ratio=6:attack={attack}:release={release}[ducked];"
-            f"[ducked][1:a]amix=inputs=2:duration=first:dropout_transition=2[out]"
+            f"[ducked][1:a]amix=inputs=2:duration=first:dropout_transition=2,asplit=2[out_hls][out_rtmp]"
         )
         return filter_str
 
@@ -105,10 +105,11 @@ class AudioEngine:
         release = 600
         filter_complex = [
             f"[0:a][1:a]sidechaincompress=threshold={level}:ratio=8:attack={attack}:release={release}[ducked];"
-            f"[ducked][1:a]amix=inputs=2:duration=second:dropout_transition=2[out]"
+            f"[ducked][1:a]amix=inputs=2:duration=second:dropout_transition=2,asplit=2[out_hls][out_rtmp]"
         ]
         cmd.extend(["-filter_complex", ";".join(filter_complex)])
-        audio_map = "[out]"
+        audio_map_hls = "[out_hls]"
+        audio_map_rtmp = "[out_rtmp]"
 
         # Input 2: Dummy video track untuk RTMPS Telegram
         if output_rtmp and self.settings.rtmp_url:
@@ -119,7 +120,7 @@ class AudioEngine:
             hls_dir = self.settings.hls_dir
             hls_dir.mkdir(parents=True, exist_ok=True)
             cmd.extend([
-                "-map", audio_map,
+                "-map", audio_map_hls,
                 "-c:a", "aac",
                 "-b:a", self.settings.stream_bitrate,
                 "-ar", str(self.settings.stream_sample_rate),
@@ -140,7 +141,7 @@ class AudioEngine:
 
             cmd.extend([
                 "-map", "2:v",
-                "-map", audio_map,
+                "-map", audio_map_rtmp,
                 "-fps_mode", "cfr",
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
@@ -215,7 +216,8 @@ class AudioEngine:
         # Input 0: musik
         cmd = [self.bin_path, "-y", "-re", "-i", str(music_file)]
 
-        audio_map = "0:a"
+        audio_map_hls = "0:a"
+        audio_map_rtmp = "0:a"
         filter_complex = []
 
         # Input 1: Voice host jika ada
@@ -223,7 +225,8 @@ class AudioEngine:
         if has_voice:
             cmd.extend(["-i", str(voice_file)])
             filter_complex.append(self.build_ducking_filter())
-            audio_map = "[out]"
+            audio_map_hls = "[out_hls]"
+            audio_map_rtmp = "[out_rtmp]"
 
         # Input video untuk Telegram RTMP (Input 2 jika ada voice, Input 1 jika tanpa voice)
         video_input_idx = 2 if has_voice else 1
@@ -241,7 +244,7 @@ class AudioEngine:
             segment_path = hls_dir / "segment_%03d.ts"
 
             cmd.extend([
-                "-map", audio_map,
+                "-map", audio_map_hls,
                 "-c:a", "aac",
                 "-b:a", self.settings.stream_bitrate,
                 "-ar", str(self.settings.stream_sample_rate),
@@ -262,7 +265,7 @@ class AudioEngine:
 
             cmd.extend([
                 "-map", f"{video_input_idx}:v",
-                "-map", audio_map,
+                "-map", audio_map_rtmp,
                 "-fps_mode", "cfr",
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
@@ -324,8 +327,19 @@ class AudioEngine:
             )
             _, stderr = self._process.communicate()
             if self._process.returncode != 0 and self._process.returncode != -15:
-                err_str = stderr.decode(errors="ignore")[-200:] if stderr else ""
+                err_str = stderr.decode(errors="ignore")[-300:] if stderr else ""
                 log.warning(f"FFmpeg berhenti dengan exit code {self._process.returncode}: {err_str}")
+                # Jika RTMP gagal (misal RTMPS Telegram putus/key kadaluarsa), coba putar ulang HLS saja agar web tetap hidup
+                if output_rtmp and "rtmp" in err_str.lower():
+                    log.warning("Koneksi RTMP Telegram ditolak/terputus, melanjutkan pemutaran di Web HLS saja...")
+                    fallback_cmd = self.build_ffmpeg_cmd(
+                        music_file,
+                        voice_file,
+                        output_hls=True,
+                        output_rtmp=False,
+                    )
+                    self._process = subprocess.Popen(fallback_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                    self._process.communicate()
         finally:
             self._process = None
             self.state.is_running = False

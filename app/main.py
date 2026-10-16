@@ -133,9 +133,9 @@ async def _broadcast_loop(
         try:
             item = queue_store.pop_next()
             if not item:
-                # Antrian kosong: jika streaming RTMP aktif, putar standby segmen pendek agar stream tidak putus
+                # Antrian kosong: jika streaming RTMP aktif, putar standby loop agar stream tetap hidup
                 if settings.stream_mode in ("rtmp", "both") and settings.rtmp_url and audio_engine.is_available():
-                    await asyncio.to_thread(audio_engine.play_standby_sync, 6)
+                    await asyncio.to_thread(audio_engine.play_standby_sync, 15)
                 else:
                     await asyncio.sleep(2)
                 continue
