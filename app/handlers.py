@@ -834,7 +834,7 @@ class Handlers:
 
         item_id = self.queue.add(
             chat_id=update.effective_chat.id if update.effective_chat else 0,
-            track_uri=f"msg:{item_id if 'item_id' in locals() else 'announcement'}",
+            track_uri="msg:announcement",
             title="📢 Pengumuman Radio",
             artist=f"Admin {who}",
             duration_ms=0,
@@ -843,12 +843,28 @@ class Handlers:
             shoutout_to=shoutout_to,
             shoutout_message=shoutout,
         )
-        pos = self.queue.count(status="pending")
+
+        # Dahulukan ke posisi #1 di antrian
+        self.queue.bump_to_front(item_id)
+
+        # Interupsi instan: jika sedang ada lagu berputar, hentikan seketika agar pesan disiarkan detik ini juga
+        was_interrupted = False
+        if self.settings.music_source == "youtube" and self.audio_engine:
+            if self.audio_engine.state.is_running:
+                was_interrupted = True
+                self.audio_engine.stop()
+
+        status_notice = (
+            "⚡ *Interupsi Instan Aktif:* Lagu saat ini dijeda seketika. Penyiar AI langsung mengudara sekarang juga!"
+            if was_interrupted
+            else "Penyiar AI akan membacakannya sekarang di aliran siaran."
+        )
+
         await update.message.reply_text(
             f"📢 *Pengumuman Admin Disiarkan!*\n"
             f"🎯 Untuk: *{_escape(shoutout_to)}*\n"
-            f"💌 Pesan: \"_{_escape(shoutout)}_\"\n"
-            f"Penyiar AI akan membacakannya dengan musik latar di antrian #{pos}.",
+            f"💌 Pesan: \"_{_escape(shoutout)}_\"\n\n"
+            f"{status_notice}",
             parse_mode=ParseMode.MARKDOWN,
         )
 

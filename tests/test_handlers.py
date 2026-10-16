@@ -46,7 +46,7 @@ def test_handlers_and_tools():
     assert items[0].shoutout_message == "Salam buat keluarga di Surabaya"
     assert items[0].source_type == "youtube"
 
-    # 3. Test source_type='message' addition
+    # 3. Test source_type='message' addition and bump
     msg_id = qs.add(
         chat_id=123,
         track_uri="msg:test",
@@ -59,9 +59,12 @@ def test_handlers_and_tools():
         shoutout_message="Jangan lupa meeting jam 2",
     )
     assert msg_id > 0
-    msg_item = qs.list(chat_id=123)[-1]
-    assert msg_item.source_type == "message"
-    assert msg_item.shoutout_to == "Semua Pegawai"
+    ok = qs.bump_to_front(msg_id)
+    assert ok is True
+    popped = qs.pop_next(chat_id=123)
+    assert popped.id == msg_id
+    assert popped.source_type == "message"
+    assert popped.shoutout_to == "Semua Pegawai"
 
     qs.close()
     if db_path.exists():
