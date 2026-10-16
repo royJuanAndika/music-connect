@@ -72,8 +72,9 @@ class LLMClient:
         headers = {
             "Authorization": f"Bearer {self.settings.openrouter_api_key}",
             "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         }
-        # header opsional khusus OpenRouter; gateway lain (mis. 9router) bisa
+        # header opsional khusus OpenRouter; gateway lain (mis. 9router/cloudflare) bisa
         # menolak header tak dikenal, jadi hanya kirim kalau ke openrouter.ai.
         if "openrouter.ai" in self.settings.openrouter_base_url:
             headers["HTTP-Referer"] = "https://github.com/spotify-tg-bot"
@@ -81,11 +82,12 @@ class LLMClient:
         payload = {
             "model": self.settings.openrouter_model,
             "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto",
             "temperature": 0.3,
             "stream": False,
         }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
         try:
             resp = await self._client.post(url, headers=headers, json=payload)
         except httpx.HTTPError as exc:
@@ -108,9 +110,21 @@ class LLMClient:
             raise LLMError(
                 f"Respons bukan JSON (content-type={ctype!r}): {body[:200]}"
             ) from exc
-        if "choices" not in data or not data["choices"]:
-            raise LLMError(f"Respons LLM aneh: {str(data)[:300]}")
-        return data["choices"][0]["message"]
+
+        # Ekstrak choices
+        choices = data.get("choices")
+        if not choices:
+            raise LLMError(f"Respons LLM tidak memiliki choices: {str(data)[:300]}")
+
+        message = choices[0].get("message")
+        if not message:
+            raise LLMError(f"Choices LLM tidak memiliki message: {str(data)[:300]}")
+
+        # Jika LLM deepseek reasoning memasukkan jawaban di content atau reasoning
+        if not message.get("content") and message.get("reasoning_content"):
+            message["content"] = message["reasoning_content"]
+
+        return message
 
     @staticmethod
     def _parse_sse(body: str) -> dict:
@@ -213,15 +227,17 @@ class LLMClient:
         persona = self.settings.host_persona
         max_chars = self.settings.host_max_chars
 
-        # Fallback template lokal jika LLM nonaktif / tanpa API key
+        # Fallback template lokal jika LLM nonaktif / tanpa API key / error
+        target_str = f"khusus buat {shoutout_to}, " if shoutout_to and shoutout_to.lower() != "semua pendengar" else ""
+        msg_str = f"pesannya: '{shoutout_message}'. " if shoutout_message else ""
+        req_str = f"request dari {requested_by}. " if requested_by else ""
+        fallback_script = (
+            f"Halo sobat radio! Berikutnya kita puterin {current_title} oleh {current_artist}, "
+            f"{req_str}{target_str}{msg_str}Selamat mendengarkan!"
+        )[:max_chars]
+
         if not self.enabled:
-            target_str = f"khusus buat {shoutout_to}, " if shoutout_to and shoutout_to.lower() != "semua pendengar" else ""
-            msg_str = f"pesannya: '{shoutout_message}'. " if shoutout_message else ""
-            req_str = f"request dari {requested_by}. " if requested_by else ""
-            return (
-                f"Halo sobat radio! Berikutnya kita puterin {current_title} oleh {current_artist}, "
-                f"{req_str}{target_str}{msg_str}Selamat mendengarkan!"
-            )[:max_chars]
+            return fallback_script
 
         prompt = (
             f"Kamu adalah Penyiar Radio FM anak muda profesional bernama DJ Connect. Persona: {persona}.\n"
@@ -251,12 +267,14 @@ class LLMClient:
         try:
             msg = await self._chat(messages, tools=[])
             script = msg.get("content", "").strip().strip('"\'')
-            if len(script) > max_chars:
-                script = script[:max_chars].rsplit(" ", 1)[0] + "..."
-            return script
+            if script:
+                if len(script) > max_chars:
+                    script = script[:max_chars].rsplit(" ", 1)[0] + "..."
+                return script
         except Exception as e:
-            log.warning(f"Gagal generate naskah DJ: {e}")
-            return ""
+            log.warning(f"Gagal generate naskah DJ via LLM ({e}), memakai fallback template.")
+
+        return fallback_script
 
     async def run(
         self,

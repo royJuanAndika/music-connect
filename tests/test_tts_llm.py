@@ -39,8 +39,9 @@ def test_tts_and_fallback():
             shoutout_message="Salam buat anak kos",
         )
     )
-    # When disabled, should cleanly return empty string without crash
-    assert script == ""
+    # When disabled, should cleanly return robust fallback script
+    assert "Sheila on 7" in script
+    assert "Budi" in script
 
     print("ALL TTS & DJ SCRIPT TESTS PASSED!")
 
