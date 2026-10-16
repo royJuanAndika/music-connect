@@ -215,6 +215,7 @@
       <div class="now-playing-content">
         <div id="trackTitle" class="track-title">Menunggu siaran dimulai...</div>
         <div id="trackArtist" class="track-artist">Live Radio Stream</div>
+        <div id="trackDuration" style="font-size: 0.85rem; color: var(--subtext); display: none;">⏱️ 00:00 / 00:00 (sisa: -00:00)</div>
         <div id="hostStatus" class="host-status" style="display:none;">🎙️ Host sedang mengudara...</div>
         <div id="shoutoutBox" class="shoutout-box" style="display:none;"></div>
       </div>
@@ -292,6 +293,13 @@
       }
     });
 
+    function fmtTime(sec) {
+      if (!sec || sec < 0) return "00:00";
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
     // Poll State
     async function updateState() {
       try {
@@ -302,6 +310,14 @@
         document.getElementById("trackTitle").textContent = data.title || "Siaran Radio";
         document.getElementById("trackArtist").textContent = data.artist || "Live Stream";
         
+        const durEl = document.getElementById("trackDuration");
+        if (data.is_running && data.duration_sec > 0) {
+          durEl.style.display = "block";
+          durEl.textContent = `⏱️ ${fmtTime(data.elapsed_sec)} / ${fmtTime(data.duration_sec)} (sisa: -${fmtTime(data.remaining_sec)})`;
+        } else {
+          durEl.style.display = "none";
+        }
+
         const hostEl = document.getElementById("hostStatus");
         hostEl.style.display = data.is_host_speaking ? "inline-flex" : "none";
 

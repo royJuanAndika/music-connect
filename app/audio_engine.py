@@ -23,6 +23,20 @@ class BroadcastState:
     is_host_speaking: bool = False
     current_shoutout: str = ""
     started_at: float = 0.0
+    duration_sec: int = 0
+
+    @property
+    def elapsed_sec(self) -> int:
+        if not self.is_running or self.started_at == 0:
+            return 0
+        return max(0, int(time.time() - self.started_at))
+
+    @property
+    def remaining_sec(self) -> int:
+        if not self.is_running or self.duration_sec <= 0:
+            return 0
+        rem = self.duration_sec - self.elapsed_sec
+        return max(0, rem)
 
 
 class AudioEngineError(Exception):
@@ -142,6 +156,7 @@ class AudioEngine:
         title: str = "Unknown",
         artist: str = "Unknown",
         shoutout: str = "",
+        duration_sec: int = 0,
     ) -> None:
         """Memutar satu segmen lagu (blocking subproses sampai lagu selesai)."""
         output_hls = self.settings.stream_mode in ("hls", "both")
@@ -161,6 +176,7 @@ class AudioEngine:
         self.state.current_title = title
         self.state.current_artist = artist
         self.state.current_shoutout = shoutout
+        self.state.duration_sec = duration_sec
         self.state.is_host_speaking = bool(voice_file and voice_file.is_file())
         self.state.started_at = time.time()
 

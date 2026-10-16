@@ -60,6 +60,9 @@ class RadioHTTPRequestHandler(SimpleHTTPRequestHandler):
                 "artist": st.current_artist,
                 "is_host_speaking": st.is_host_speaking,
                 "shoutout": st.current_shoutout,
+                "duration_sec": st.duration_sec,
+                "elapsed_sec": st.elapsed_sec,
+                "remaining_sec": st.remaining_sec,
             })
 
         # 2. API: Queue
@@ -169,6 +172,7 @@ class RadioHTTPRequestHandler(SimpleHTTPRequestHandler):
         artist = "YouTube"
         track_uri = f"query:{query}"
         source_url = ""
+        duration_ms = 0
 
         if self.downloader.is_available():
             try:
@@ -177,6 +181,7 @@ class RadioHTTPRequestHandler(SimpleHTTPRequestHandler):
                 artist = meta.uploader
                 track_uri = f"yt:{meta.video_id}"
                 source_url = meta.webpage_url
+                duration_ms = meta.duration_sec * 1000
             except DownloaderError as e:
                 return self._send_json(400, {"ok": False, "error": str(e)})
 
@@ -185,7 +190,7 @@ class RadioHTTPRequestHandler(SimpleHTTPRequestHandler):
             track_uri=track_uri,
             title=title,
             artist=artist,
-            duration_ms=0,
+            duration_ms=duration_ms,
             requested_by=name,
             source_type="youtube",
             source_url=source_url,

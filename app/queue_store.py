@@ -201,11 +201,29 @@ class QueueStore:
         if status is not None:
             query += " AND status=?"
             params.append(status)
-        query += " ORDER BY id ASC"
+        query += " ORDER BY added_at ASC, id ASC"
 
         with self._lock:
             rows = self._conn.execute(query, tuple(params)).fetchall()
         return [self._row_to_item(r) for r in rows]
+
+    def bump_to_front(self, item_id: int) -> bool:
+        """Dahulukan lagu pending ke urutan teratas antrian berikutnya."""
+        with self._lock:
+            # Cari waktu minimum dari item pending
+            row = self._conn.execute(
+                "SELECT MIN(added_at) AS min_time FROM queue WHERE status='pending'"
+            ).fetchone()
+            if not row or row["min_time"] is None:
+                return False
+            min_time = float(row["min_time"])
+            # Set added_at lebih awal 10 detik dari yang paling depan
+            cur = self._conn.execute(
+                "UPDATE queue SET added_at=? WHERE id=? AND status='pending'",
+                (min_time - 10.0, item_id),
+            )
+            self._conn.commit()
+            return cur.rowcount > 0
 
     def pop_next(self, chat_id: Optional[int] = None) -> QueueItem | None:
         """Ambil lagu pending teratas dan tandai sebagai playing."""
@@ -214,7 +232,7 @@ class QueueStore:
         if chat_id is not None:
             query += " AND chat_id=?"
             params.append(chat_id)
-        query += " ORDER BY id ASC LIMIT 1"
+        query += " ORDER BY added_at ASC, id ASC LIMIT 1"
 
         with self._lock:
             row = self._conn.execute(query, tuple(params)).fetchone()

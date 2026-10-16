@@ -35,12 +35,13 @@ _state: dict = {"ready": False, "device_online": False, "device_name": ""}
 BOT_COMMANDS = [
     BotCommand("request", "Request lagu (judul atau URL YouTube)"),
     BotCommand("salam", "Request + titip salam (judul | salam)"),
-    BotCommand("now", "Lagu & status siaran saat ini"),
+    BotCommand("skip", "Lewati lagu yang sedang diputar"),
+    BotCommand("bump", "Dahulukan lagu ke urutan depan (nomor)"),
+    BotCommand("now", "Lagu & sisa durasi siaran saat ini"),
     BotCommand("list", "Lihat antrian lagu"),
     BotCommand("remove", "Hapus lagu dari antrian"),
     BotCommand("ask", "Ngobrol atau request lewat AI"),
     BotCommand("status", "Status siaran radio"),
-    BotCommand("search", "Cari lagu"),
     BotCommand("help", "Bantuan"),
 ]
 
@@ -144,7 +145,13 @@ async def _broadcast_loop(
                     try:
                         meta = downloader.resolve_query(item.source_url or item.title)
                         music_file = downloader.download_audio(meta)
-                        queue_store.update_item(item.id, local_path=str(music_file))
+                        queue_store.update_item(
+                            item.id,
+                            local_path=str(music_file),
+                        )
+                        if item.duration_ms == 0 and meta.duration_sec > 0:
+                            duration_sec = meta.duration_sec
+                            item.duration_ms = meta.duration_sec * 1000
                     except Exception as e:
                         log.error(f"Gagal mengunduh audio #{item.id}: {e}")
                         queue_store.update_item(item.id, status="error")
@@ -182,6 +189,7 @@ async def _broadcast_loop(
                     log.warning(f"AI Host pipeline fallback (play musik saja): {e}")
 
             # 3. Putar di AudioEngine (blocking di worker thread)
+            duration_sec = item.duration_ms // 1000 if item.duration_ms > 0 else 0
             if audio_engine.is_available():
                 await asyncio.to_thread(
                     audio_engine.play_track_sync,
@@ -190,6 +198,7 @@ async def _broadcast_loop(
                     title=item.title,
                     artist=item.artist,
                     shoutout=item.shoutout_message,
+                    duration_sec=duration_sec,
                 )
             else:
                 log.warning("FFmpeg tidak tersedia; simulasi jeda pemutaran.")
@@ -265,6 +274,8 @@ def main() -> None:
     app.add_handler(CommandHandler("status", h.cmd_status))
     app.add_handler(CommandHandler(["request", "queue", "q"], h.cmd_queue))
     app.add_handler(CommandHandler("salam", h.cmd_salam))
+    app.add_handler(CommandHandler(["next", "skip"], h.cmd_next))
+    app.add_handler(CommandHandler(["bump", "top"], h.cmd_bump))
     app.add_handler(CommandHandler("list", h.cmd_list))
     app.add_handler(CommandHandler("remove", h.cmd_remove))
     app.add_handler(CommandHandler("now", h.cmd_now))

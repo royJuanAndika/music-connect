@@ -492,10 +492,21 @@ class Handlers:
             status_text = "🟢 Sedang Mengudara" if st.is_running else "⚪ Menunggu Siaran"
             host_text = "\n🎙️ *Host AI:* Sedang bicara" if st.is_host_speaking else ""
             shout_text = f"\n💌 *Salam:* \"_{_escape(st.current_shoutout)}_\"" if st.current_shoutout else ""
+
+            duration_text = ""
+            if st.is_running and st.duration_sec > 0:
+                el_min, el_sec = divmod(st.elapsed_sec, 60)
+                rem_min, rem_sec = divmod(st.remaining_sec, 60)
+                tot_min, tot_sec = divmod(st.duration_sec, 60)
+                duration_text = (
+                    f"\n⏱️ *Durasi:* `{el_min:02d}:{el_sec:02d}` / `{tot_min:02d}:{tot_sec:02d}` "
+                    f"(sisa: `-{rem_min:02d}:{rem_sec:02d}`)"
+                )
+
             return await update.message.reply_text(
                 f"*Status Radio:* {status_text}\n"
                 f"*Lagu:* {_escape(st.current_title)} — {_escape(st.current_artist)}"
-                f"{host_text}{shout_text}",
+                f"{duration_text}{host_text}{shout_text}",
                 parse_mode=ParseMode.MARKDOWN,
             )
 
@@ -516,7 +527,49 @@ class Handlers:
 
     @_cmd
     async def cmd_next(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._allowed(update):
+            return await self._deny(update)
+
+        if self.settings.music_source == "youtube" and self.audio_engine:
+            if not self.audio_engine.state.is_running:
+                return await update.message.reply_text("Tidak ada lagu yang sedang diputar.")
+            cur_title = self.audio_engine.state.current_title
+            self.audio_engine.stop()
+            return await update.message.reply_text(
+                f"⏭ *Lagu di-skip:* {_escape(cur_title)}\nMemutar lagu berikutnya di antrian...",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
         return await self._control(update, "next")
+
+    @_cmd
+    async def cmd_bump(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Dahulukan lagu dari antrian ke paling depan: /bump <nomor>"""
+        if not self._allowed(update):
+            return await self._deny(update)
+
+        arg = " ".join(ctx.args).strip()
+        if not arg or not arg.isdigit():
+            return await update.message.reply_text("Pakai: `/bump <nomor>` (lihat nomor urut di `/list`)", parse_mode=ParseMode.MARKDOWN)
+
+        pos = int(arg)
+        items = self.queue.list(status="pending")
+        if not items:
+            return await update.message.reply_text("Antrian lagu sedang kosong.")
+
+        if pos < 1 or pos > len(items):
+            return await update.message.reply_text(f"Nomor tidak valid (1-{len(items)}).")
+
+        target_item = items[pos - 1]
+        ok = self.queue.bump_to_front(target_item.id)
+        if ok:
+            await update.message.reply_text(
+                f"⚡ *Lagu didahulukan ke urutan #1:* *{_escape(target_item.title)}* — {_escape(target_item.artist)}\n"
+                f"Lagu ini akan diputar langsung setelah lagu sekarang selesai/di-skip.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        else:
+            await update.message.reply_text("Gagal memindahkan posisi lagu.")
 
     @_cmd
     async def cmd_pause(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
