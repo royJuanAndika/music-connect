@@ -272,6 +272,7 @@ def main() -> None:
     # Register command handlers
     app.add_handler(CommandHandler(["start", "help"], h.cmd_start))
     app.add_handler(CommandHandler("status", h.cmd_status))
+    app.add_handler(CommandHandler("search", h.cmd_search))
     app.add_handler(CommandHandler(["request", "queue", "q"], h.cmd_queue))
     app.add_handler(CommandHandler("salam", h.cmd_salam))
     app.add_handler(CommandHandler(["next", "skip"], h.cmd_next))
@@ -281,6 +282,10 @@ def main() -> None:
     app.add_handler(CommandHandler("now", h.cmd_now))
     app.add_handler(CommandHandler("ask", h.cmd_ask))
     app.add_handler(CommandHandler("whoami", h.cmd_whoami))
+
+    # Callback Query Handler (Inline Keyboard Button clicks)
+    from telegram.ext import CallbackQueryHandler
+    app.add_handler(CallbackQueryHandler(h.handle_callback))
 
     # Natural language message handler
     from telegram.ext import MessageHandler, filters

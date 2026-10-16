@@ -66,6 +66,10 @@ def test_validation():
     cache_path = dl.get_cached_file("non_existent_id")
     assert cache_path is None
 
+    # 5. Test search_multitracks signature and empty query check
+    empty_results = dl.search_multitracks("   ")
+    assert empty_results == []
+
     print("ALL DOWNLOADER SELF-CHECKS PASSED!")
 
 

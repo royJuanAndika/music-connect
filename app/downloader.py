@@ -62,6 +62,54 @@ class YouTubeDownloader:
             cmd.extend(["--proxy", self.settings.yt_proxy])
         return cmd
 
+    def search_multitracks(self, query: str, limit: int = 5) -> list[TrackMetadata]:
+        """Cari beberapa hasil lagu teratas dari YouTube (ytsearchN:)."""
+        clean_query = query.strip()
+        if not clean_query:
+            return []
+
+        limit = max(1, min(limit, 10))
+        target = f"ytsearch{limit}:{clean_query}"
+
+        cmd = self._build_base_cmd() + [
+            "--dump-json",
+            "--default-search", "ytsearch",
+            "--no-playlist",
+            target,
+        ]
+
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=35)
+            if res.returncode != 0:
+                log.warning(f"ytsearch gagal: {res.stderr[:200] if res.stderr else ''}")
+                return []
+        except Exception as e:
+            log.warning(f"Gagal menjalankan yt-dlp search: {e}")
+            return []
+
+        results: list[TrackMetadata] = []
+        for line in res.stdout.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                meta = TrackMetadata(
+                    video_id=data.get("id", ""),
+                    title=data.get("title", "Unknown Title"),
+                    uploader=data.get("uploader", data.get("channel", "Unknown")),
+                    duration_sec=int(data.get("duration") or 0),
+                    is_live=bool(data.get("is_live", False)),
+                    thumbnail_url=data.get("thumbnail", ""),
+                    webpage_url=data.get("webpage_url", f"https://www.youtube.com/watch?v={data.get('id', '')}"),
+                )
+                if not (self.settings.yt_block_live and meta.is_live):
+                    results.append(meta)
+            except Exception:
+                continue
+
+        return results
+
     def resolve_query(self, query: str) -> TrackMetadata:
         """Ekstraksi metadata dari URL langsung atau pencarian teks (ytsearch1:)."""
         clean_query = query.strip()
