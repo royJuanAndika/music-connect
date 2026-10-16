@@ -133,16 +133,22 @@ class AudioEngine:
             cmd.extend([
                 "-map", f"{video_input_idx}:v",
                 "-map", audio_map,
+                "-fps_mode", "cfr",
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
                 "-tune", "zerolatency",
                 "-b:v", "200k",
+                "-maxrate", "250k",
+                "-bufsize", "500k",
                 "-pix_fmt", "yuv420p",
                 "-g", "30",
+                "-keyint_min", "30",
+                "-sc_threshold", "0",
                 "-c:a", "aac",
                 "-b:a", self.settings.stream_bitrate,
                 "-ar", str(self.settings.stream_sample_rate),
                 "-ac", str(self.settings.stream_channels),
+                "-max_muxing_queue_size", "9999",
                 "-f", "flv",
                 full_rtmp,
             ])
@@ -195,6 +201,62 @@ class AudioEngine:
             self.state.is_running = False
             self.state.is_host_speaking = False
 
+    def build_standby_cmd(
+        self,
+        duration_sec: int = 10,
+        output_hls: bool = True,
+        output_rtmp: bool = False,
+    ) -> list[str]:
+        """Perintah FFmpeg untuk memutar silence/standby tone agar koneksi stream tidak mati saat antrian kosong."""
+        cmd = [
+            self.bin_path, "-y", "-re",
+            "-f", "lavfi", "-t", str(duration_sec),
+            "-i", f"anullsrc=r={self.settings.stream_sample_rate}:cl=stereo",
+        ]
+
+        # Output HLS
+        if output_hls:
+            hls_dir = self.settings.hls_dir
+            hls_dir.mkdir(parents=True, exist_ok=True)
+            cmd.extend([
+                "-map", "0:a",
+                "-c:a", "aac",
+                "-b:a", self.settings.stream_bitrate,
+                "-f", "hls",
+                "-hls_time", str(self.settings.hls_segment_seconds),
+                "-hls_list_size", "5",
+                "-hls_flags", "delete_segments+append_list",
+                "-hls_segment_filename", str(hls_dir / "segment_%03d.ts"),
+                str(hls_dir / "live.m3u8"),
+            ])
+
+        # Output RTMP
+        if output_rtmp and self.settings.rtmp_url:
+            full_rtmp = self.settings.rtmp_url
+            if self.settings.rtmp_key:
+                full_rtmp = f"{self.settings.rtmp_url.rstrip('/')}/{self.settings.rtmp_key}"
+
+            cmd.extend([
+                "-f", "lavfi", "-t", str(duration_sec), "-i", "color=c=black:s=640x360:r=15",
+                "-map", "1:v",
+                "-map", "0:a",
+                "-fps_mode", "cfr",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-b:v", "150k",
+                "-pix_fmt", "yuv420p",
+                "-g", "30",
+                "-keyint_min", "30",
+                "-c:a", "aac",
+                "-b:a", self.settings.stream_bitrate,
+                "-max_muxing_queue_size", "9999",
+                "-f", "flv",
+                full_rtmp,
+            ])
+
+        return cmd
+
     def stop(self) -> None:
         """Hentikan siaran yang sedang berjalan."""
         if self._process:
@@ -204,3 +266,29 @@ class AudioEngine:
                 pass
             self._process = None
         self.state.is_running = False
+
+    def play_standby_sync(self, duration_sec: int = 10) -> None:
+        """Memutar segmen standby agar stream RTMPS tidak terputus."""
+        output_hls = self.settings.stream_mode in ("hls", "both")
+        output_rtmp = (
+            self.settings.stream_mode in ("rtmp", "both")
+            and bool(self.settings.rtmp_url)
+        )
+        cmd = self.build_standby_cmd(duration_sec, output_hls, output_rtmp)
+        self.state.is_running = True
+        self.state.current_title = "Radio Standby"
+        self.state.current_artist = "Menunggu Request..."
+        self.state.current_shoutout = ""
+        self.state.duration_sec = duration_sec
+        self.state.started_at = time.time()
+
+        try:
+            self._process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+            self._process.communicate()
+        finally:
+            self._process = None
+            self.state.is_running = False

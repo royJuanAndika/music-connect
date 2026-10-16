@@ -21,7 +21,7 @@ def test_queue_store():
         required_cols = {
             "id", "chat_id", "track_uri", "title", "artist", "duration_ms",
             "requested_by", "added_at", "source_type", "source_url",
-            "local_path", "shoutout_message", "shoutout_audio_path", "status"
+            "local_path", "shoutout_to", "shoutout_message", "shoutout_audio_path", "status"
         }
         assert required_cols.issubset(cols), f"Missing columns in schema: {required_cols - cols}"
 
@@ -43,10 +43,13 @@ def test_queue_store():
             requested_by="user1",
             source_type="youtube",
             source_url="https://youtube.com/watch?v=vid1",
+            shoutout_to="Anak Kantor",
             shoutout_message="Salam buat kawan-kawan",
         )
         assert item_id1 > 0
         assert qs.count(status="pending") == 1
+        items = qs.list(status="pending")
+        assert items[0].shoutout_to == "Anak Kantor"
 
         # 4. Test Cooldown
         try:

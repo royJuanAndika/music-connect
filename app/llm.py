@@ -158,6 +158,7 @@ class LLMClient:
         current_title: str,
         current_artist: str,
         requested_by: str = "",
+        shoutout_to: str = "",
         shoutout_message: str = "",
         time_context: str = "",
     ) -> str:
@@ -169,23 +170,27 @@ class LLMClient:
         max_chars = self.settings.host_max_chars
 
         prompt = (
-            f"Kamu adalah Host Radio AI. Persona: {persona}.\n"
+            f"Kamu adalah Penyiar Radio FM anak muda profesional bernama DJ Connect. Persona: {persona}.\n"
             f"Waktu siaran: {time_context or 'Sekarang'}.\n"
             f"Lagu berikutnya yang akan diputar: {current_title} oleh {current_artist}.\n"
         )
         if requested_by:
-            prompt += f"Lagu ini di-request oleh: {requested_by}.\n"
+            prompt += f"Lagu di-request oleh: {requested_by}.\n"
+        if shoutout_to:
+            prompt += f"Salam ini ditujukan KHUSUS UNTUK: {shoutout_to}.\n"
         if shoutout_message:
-            prompt += f"Pesan titip salam dari pendengar: \"{shoutout_message}\".\n"
+            prompt += f"Isi pesan salam: \"{shoutout_message}\".\n"
 
         prompt += (
-            f"\nTUGAS: Buat naskah siaran pendek (intro/salam) dalam Bahasa Indonesia yang santai, "
-            f"ramah, dan natural layaknya penyiar radio FM. Bacakan salamnya jika ada. "
-            f"Maksimal {max_chars} karakter. HANYA keluarkan naskah ucapan tanpa tanda petik pembuka/penutup."
+            f"\nTUGAS:\n"
+            f"Buat naskah opening / intro siaran radio FM yang seru, hangat, dan luwes dalam Bahasa Indonesia. "
+            f"Sapa kawan-kawan pendengar, sebutkan siapa yang titip salam dan untuk siapa salam itu ditujukan, "
+            f"lalu antarkan masuk ke lagu berikutnya dengan gaya DJ radio yang asik.\n"
+            f"Panjang maksimal {max_chars} karakter. Jangan gunakan tanda petik pembuka/penutup."
         )
 
         messages = [
-            {"role": "system", "content": "Kamu adalah Host Radio AI profesional berbahasa Indonesia."},
+            {"role": "system", "content": "Kamu adalah Penyiar Radio FM profesional Indonesia yang ceria dan akrab."},
             {"role": "user", "content": prompt},
         ]
 

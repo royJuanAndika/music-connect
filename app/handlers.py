@@ -646,18 +646,36 @@ class Handlers:
 
     @_cmd
     async def cmd_salam(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        """Kirim request dengan titip salam: /salam <judul> | <pesan salam>"""
+        """Kirim request dengan titip salam:
+        Format 1: /salam <judul> | untuk <target> | <pesan salam>
+        Format 2: /salam <judul> | <pesan salam>
+        """
         if not self._allowed(update):
             return await self._deny(update)
 
         raw = " ".join(ctx.args).strip()
         if not raw or "|" not in raw:
             return await update.message.reply_text(
-                "Format salah. Gunakan: `/salam <judul lagu> | <pesan titip salam>`",
+                "Format salah. Gunakan:\n"
+                "`/salam <judul lagu> | untuk <target> | <pesan salam>`\n"
+                "Atau: `/salam <judul lagu> | <pesan salam>`",
                 parse_mode=ParseMode.MARKDOWN,
             )
 
-        query, shoutout = [p.strip() for p in raw.split("|", 1)]
+        parts = [p.strip() for p in raw.split("|") if p.strip()]
+        if len(parts) >= 3:
+            query = parts[0]
+            target_raw = parts[1]
+            shoutout = " | ".join(parts[2:])
+            # Bersihkan prefix "untuk" jika ada
+            shoutout_to = target_raw[5:].strip() if target_raw.lower().startswith("untuk ") else target_raw
+        elif len(parts) == 2:
+            query = parts[0]
+            shoutout_to = "semua pendengar"
+            shoutout = parts[1]
+        else:
+            return await update.message.reply_text("Format tidak valid.")
+
         if not query:
             return await update.message.reply_text("Judul lagu tidak boleh kosong.")
 
@@ -675,7 +693,7 @@ class Handlers:
         from .downloader import DownloaderError
         from .queue_store import QueueValidationError
 
-        text_check = f"{query} {shoutout}"
+        text_check = f"{query} {shoutout_to} {shoutout}"
         try:
             self.queue.check_moderation_and_quota(
                 requested_by=who,
@@ -692,6 +710,7 @@ class Handlers:
         artist = "YouTube"
         uri = f"query:{query}"
         source_url = ""
+        duration_ms = 0
 
         if self.downloader and self.downloader.is_available():
             try:
@@ -700,6 +719,7 @@ class Handlers:
                 artist = meta.uploader
                 uri = f"yt:{meta.video_id}"
                 source_url = meta.webpage_url
+                duration_ms = meta.duration_sec * 1000
             except DownloaderError as e:
                 return await update.message.reply_text(f"⚠️ Gagal resolusi YouTube: {e}")
 
@@ -708,18 +728,20 @@ class Handlers:
             track_uri=uri,
             title=title,
             artist=artist,
-            duration_ms=0,
+            duration_ms=duration_ms,
             requested_by=who,
             source_type="youtube",
             source_url=source_url,
+            shoutout_to=shoutout_to,
             shoutout_message=shoutout,
         )
         pos = self.queue.count(status="pending")
         await update.message.reply_text(
-            f"📻 Request & Salam diterima!\n"
-            f"Lagu: *{_escape(title)}* — {_escape(artist)}\n"
-            f"Salam: \"_{_escape(shoutout)}_\"\n"
-            f"Posisi queue: {pos}",
+            f"📻 *Request & Salam diterima!*\n"
+            f"🎵 Lagu: *{_escape(title)}* — {_escape(artist)}\n"
+            f"🎯 Untuk: *{_escape(shoutout_to)}*\n"
+            f"💌 Salam: \"_{_escape(shoutout)}_\"\n"
+            f"🔢 Posisi antrian: #{pos}",
             parse_mode=ParseMode.MARKDOWN,
         )
 

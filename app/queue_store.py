@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS queue (
     source_type         TEXT    NOT NULL DEFAULT 'youtube',
     source_url          TEXT    NOT NULL DEFAULT '',
     local_path          TEXT    NOT NULL DEFAULT '',
+    shoutout_to         TEXT    NOT NULL DEFAULT '',
     shoutout_message    TEXT    NOT NULL DEFAULT '',
     shoutout_audio_path TEXT    NOT NULL DEFAULT '',
     status              TEXT    NOT NULL DEFAULT 'pending'
@@ -43,6 +44,7 @@ class QueueItem:
     source_type: str = "youtube"
     source_url: str = ""
     local_path: str = ""
+    shoutout_to: str = ""
     shoutout_message: str = ""
     shoutout_audio_path: str = ""
     status: str = "pending"  # pending | playing | played | error
@@ -74,6 +76,7 @@ class QueueStore:
                 "source_type": "TEXT NOT NULL DEFAULT 'youtube'",
                 "source_url": "TEXT NOT NULL DEFAULT ''",
                 "local_path": "TEXT NOT NULL DEFAULT ''",
+                "shoutout_to": "TEXT NOT NULL DEFAULT ''",
                 "shoutout_message": "TEXT NOT NULL DEFAULT ''",
                 "shoutout_audio_path": "TEXT NOT NULL DEFAULT ''",
                 "status": "TEXT NOT NULL DEFAULT 'pending'",
@@ -145,6 +148,7 @@ class QueueStore:
         source_type: str = "youtube",
         source_url: str = "",
         local_path: str = "",
+        shoutout_to: str = "",
         shoutout_message: str = "",
         shoutout_audio_path: str = "",
         status: str = "pending",
@@ -153,8 +157,8 @@ class QueueStore:
             cur = self._conn.execute(
                 "INSERT INTO queue ("
                 "  chat_id, track_uri, title, artist, duration_ms, requested_by, added_at, "
-                "  source_type, source_url, local_path, shoutout_message, shoutout_audio_path, status"
-                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "  source_type, source_url, local_path, shoutout_to, shoutout_message, shoutout_audio_path, status"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     chat_id,
                     track_uri,
@@ -166,6 +170,7 @@ class QueueStore:
                     source_type,
                     source_url,
                     local_path,
+                    shoutout_to,
                     shoutout_message,
                     shoutout_audio_path,
                     status,
@@ -187,6 +192,7 @@ class QueueStore:
             source_type=r["source_type"] if "source_type" in r.keys() else "youtube",
             source_url=r["source_url"] if "source_url" in r.keys() else "",
             local_path=r["local_path"] if "local_path" in r.keys() else "",
+            shoutout_to=r["shoutout_to"] if "shoutout_to" in r.keys() else "",
             shoutout_message=r["shoutout_message"] if "shoutout_message" in r.keys() else "",
             shoutout_audio_path=r["shoutout_audio_path"] if "shoutout_audio_path" in r.keys() else "",
             status=r["status"] if "status" in r.keys() else "pending",

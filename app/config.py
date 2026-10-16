@@ -84,7 +84,8 @@ class Settings:
     host_interval_songs: int = 3
     llm_provider: str = "openrouter"
     llm_model: str = "openrouter/free"
-    tts_engine: str = "piper"
+    tts_engine: str = "edge-tts"
+    tts_voice: str = "id-ID-ArdiNeural"
     piper_path: str = "bin/piper.exe"
     piper_model: str = "models/id_ID-news-medium.onnx"
     host_max_chars: int = 400
@@ -240,7 +241,8 @@ def load_settings() -> Settings:
         host_interval_songs=int(os.getenv("HOST_INTERVAL_SONGS", "3")),
         llm_provider=os.getenv("LLM_PROVIDER", "openrouter").strip(),
         llm_model=os.getenv("LLM_MODEL", os.getenv("OPENROUTER_MODEL", "openrouter/free")).strip(),
-        tts_engine=os.getenv("TTS_ENGINE", "piper").strip(),
+        tts_engine=os.getenv("TTS_ENGINE", "edge-tts").strip().lower(),
+        tts_voice=os.getenv("TTS_VOICE", "id-ID-ArdiNeural").strip(),
         piper_path=os.getenv("PIPER_PATH", "bin/piper.exe").strip(),
         piper_model=os.getenv("PIPER_MODEL", "models/id_ID-news-medium.onnx").strip(),
         host_max_chars=int(os.getenv("HOST_MAX_CHARS", "400")),

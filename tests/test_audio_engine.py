@@ -50,6 +50,13 @@ def test_audio_engine():
     assert "-filter_complex" in cmd_str
     assert "-f hls" in cmd_str
     assert "-f flv rtmp://live.telegram.org/app/secretkey123" in cmd_str
+    assert "-max_muxing_queue_size 9999" in cmd_str
+    assert "-fps_mode cfr" in cmd_str
+
+    # Test standby command
+    standby_cmd = engine.build_standby_cmd(10, output_hls=True, output_rtmp=True)
+    assert "anullsrc=" in " ".join(standby_cmd)
+    assert "-f flv" in " ".join(standby_cmd)
 
     if voice_file.exists():
         voice_file.unlink()

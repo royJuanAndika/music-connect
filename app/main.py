@@ -131,8 +131,11 @@ async def _broadcast_loop(
         try:
             item = queue_store.pop_next()
             if not item:
-                # Antrian kosong: jeda singkat sebelum mengecek lagi
-                await asyncio.sleep(2)
+                # Antrian kosong: jika streaming RTMP aktif, putar standby segmen pendek agar stream tidak putus
+                if settings.stream_mode in ("rtmp", "both") and settings.rtmp_url and audio_engine.is_available():
+                    await asyncio.to_thread(audio_engine.play_standby_sync, 6)
+                else:
+                    await asyncio.sleep(2)
                 continue
 
             song_counter += 1
@@ -180,10 +183,11 @@ async def _broadcast_loop(
                         current_title=item.title,
                         current_artist=item.artist,
                         requested_by=item.requested_by,
+                        shoutout_to=item.shoutout_to,
                         shoutout_message=item.shoutout_message,
                     )
                     if script and tts.is_available():
-                        voice_file = tts.synthesize(script)
+                        voice_file = await tts.synthesize_async(script)
                         queue_store.update_item(item.id, shoutout_audio_path=str(voice_file))
                 except Exception as e:
                     log.warning(f"AI Host pipeline fallback (play musik saja): {e}")

@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt yt-dlp
+RUN pip install --no-cache-dir -r requirements.txt yt-dlp edge-tts
 
 COPY app ./app
 COPY web ./web
