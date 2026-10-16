@@ -69,8 +69,9 @@ class AudioEngine:
 
         filter_str = (
             f"[0:a][1:a]sidechaincompress="
-            f"threshold={level}:ratio=14:attack={attack}:release={release}[ducked];"
-            f"[ducked][1:a]amix=inputs=2:duration=first:dropout_transition=2,asplit=2[out_hls][out_rtmp]"
+            f"threshold={level}:ratio=16:attack={attack}:release={release}[ducked];"
+            f"[1:a]volume=1.5[v_boost];"
+            f"[ducked][v_boost]amix=inputs=2:duration=first:dropout_transition=2,asplit=2[out_hls][out_rtmp]"
         )
         return filter_str
 
@@ -104,8 +105,9 @@ class AudioEngine:
         attack = 150
         release = 600
         filter_complex = [
-            f"[0:a][1:a]sidechaincompress=threshold={level}:ratio=8:attack={attack}:release={release}[ducked];"
-            f"[ducked][1:a]amix=inputs=2:duration=second:dropout_transition=2,asplit=2[out_hls][out_rtmp]"
+            f"[0:a][1:a]sidechaincompress=threshold={level}:ratio=16:attack={attack}:release={release}[ducked];"
+            f"[1:a]volume=1.5[v_boost];"
+            f"[ducked][v_boost]amix=inputs=2:duration=second:dropout_transition=2,asplit=2[out_hls][out_rtmp]"
         ]
         cmd.extend(["-filter_complex", ";".join(filter_complex)])
         audio_map_hls = "[out_hls]"

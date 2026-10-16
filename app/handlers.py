@@ -334,7 +334,22 @@ class Handlers:
     async def cmd_status(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
             return await self._deny(update)
-        dev = "\u2705 online" if self.watchdog.online else "\u26a0\ufe0f offline"
+
+        if self.settings.music_source == "youtube" and self.audio_engine:
+            st = self.audio_engine.state
+            status_text = "🟢 Sedang Mengudara" if st.is_running else "⚪ Standby"
+            n_pending = self.queue.count(status="pending")
+            return await update.message.reply_text(
+                f"📻 *Status Radio Stream AI*\n"
+                f"• Status: {status_text}\n"
+                f"• Sedang Diputar: *{_escape(st.current_title)}* — {_escape(st.current_artist)}\n"
+                f"• Antrian Pending: `{n_pending}` lagu\n"
+                f"• Output Mode: `{self.settings.stream_mode}`\n"
+                f"• Web Player: http://localhost:{self.settings.web_port}",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        dev = "\u2705 online" if (self.watchdog and self.watchdog.online) else "\u26a0\ufe0f offline"
         n = self.queue.count(update.effective_chat.id)
         await update.message.reply_text(
             f"Device *{self.settings.device_name or '?'}*: {dev}\n"

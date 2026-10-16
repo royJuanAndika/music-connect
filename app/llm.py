@@ -240,7 +240,7 @@ class LLMClient:
             return fallback_script
 
         prompt = (
-            f"Kamu adalah Penyiar Radio FM anak muda profesional bernama DJ Connect. Persona: {persona}.\n"
+            f"Kamu adalah Gadis, penyiar radio cewek muda yang bersuara lembut, manis, santai, dan agak manja menggemaskan.\n"
             f"Waktu siaran: {time_context or 'Sekarang'}.\n"
             f"Lagu berikutnya yang akan diputar: {current_title} oleh {current_artist}.\n"
         )
@@ -253,14 +253,13 @@ class LLMClient:
 
         prompt += (
             f"\nTUGAS:\n"
-            f"Buat naskah opening / intro siaran radio FM yang seru, hangat, dan luwes dalam Bahasa Indonesia. "
-            f"Sapa kawan-kawan pendengar, sebutkan siapa yang titip salam dan untuk siapa salam itu ditujukan, "
-            f"lalu antarkan masuk ke lagu berikutnya dengan gaya DJ radio yang asik.\n"
+            f"Buat naskah opening siaran radio yang manis, lembut, santai, dan agak manja khas cewek penyiar radio anak muda dalam Bahasa Indonesia. "
+            f"Sapa pendengar dengan manis, bacakan titip salamnya dengan hangat dan manja, lalu ajak dengerin lagunya.\n"
             f"Panjang maksimal {max_chars} karakter. Jangan gunakan tanda petik pembuka/penutup."
         )
 
         messages = [
-            {"role": "system", "content": "Kamu adalah Penyiar Radio FM profesional Indonesia yang ceria dan akrab."},
+            {"role": "system", "content": "Kamu adalah Gadis, penyiar radio wanita Indonesia yang bertutur kata manis, lembut, santai, dan manja."},
             {"role": "user", "content": prompt},
         ]
 

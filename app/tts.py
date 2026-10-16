@@ -61,9 +61,10 @@ class RadioTTS:
 
         # 1. Gunakan Edge-TTS Neural (Default)
         if self.settings.tts_engine == "edge-tts" and edge_tts is not None:
-            voice = self.settings.tts_voice or "id-ID-ArdiNeural"
+            voice = self.settings.tts_voice or "id-ID-GadisNeural"
             try:
-                communicate = edge_tts.Communicate(clean_text, voice)
+                # rate="-5%" dan pitch="+2Hz" untuk intonasi lebih lembut, santai, dan manja
+                communicate = edge_tts.Communicate(clean_text, voice, rate="-6%", pitch="+3Hz")
                 await communicate.save(str(output_path))
                 if output_path.is_file() and output_path.stat().st_size > 0:
                     return output_path
