@@ -60,7 +60,8 @@ class AudioEngine:
         """Filter graph FFmpeg untuk dynamic sidechain compression (ducking).
         
         [0:a] adalah musik, [1:a] adalah suara host.
-        Ketika suara host masuk, musik ditekan otomatis ke level ducking.
+        PENTING: [1:a]apad memastikan sidechain tidak memutus stream saat suara host habis,
+        sehingga lagu tetap diputar penuh sampai durasi musik selesai.
         Gunakan asplit=2 agar output stream bisa dipakai bersama oleh HLS dan RTMP.
         """
         level = self.settings.duck_level
@@ -68,7 +69,8 @@ class AudioEngine:
         release = self.settings.duck_release_ms
 
         filter_str = (
-            f"[0:a][1:a]sidechaincompress="
+            f"[1:a]apad[pad_voice];"
+            f"[0:a][pad_voice]sidechaincompress="
             f"threshold={level}:ratio=16:attack={attack}:release={release}[ducked];"
             f"[1:a]volume=1.5[v_boost];"
             f"[ducked][v_boost]amix=inputs=2:duration=first:dropout_transition=2,asplit=2[out_hls][out_rtmp]"

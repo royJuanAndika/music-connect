@@ -25,8 +25,9 @@ def test_audio_engine():
     # 1. Test filter string
     filt = engine.build_ducking_filter()
     assert "sidechaincompress=" in filt
+    assert "apad" in filt
     assert "threshold=0.03" in filt
-    assert "ratio=14" in filt
+    assert "ratio=16" in filt
     assert "attack=15" in filt
     assert "release=600" in filt
     assert "amix=" in filt
