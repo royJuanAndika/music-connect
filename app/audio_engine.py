@@ -219,15 +219,15 @@ class AudioEngine:
         filter_complex = []
 
         # Input 1: Voice host jika ada
-        if voice_file and voice_file.is_file():
+        has_voice = bool(voice_file and Path(voice_file).is_file())
+        if has_voice:
             cmd.extend(["-i", str(voice_file)])
             filter_complex.append(self.build_ducking_filter())
             audio_map = "[out]"
 
-        # Input 2 (atau 1 jika tanpa voice): synthetic black video untuk Telegram RTMP
-        video_input_idx = None
+        # Input video untuk Telegram RTMP (Input 2 jika ada voice, Input 1 jika tanpa voice)
+        video_input_idx = 2 if has_voice else 1
         if output_rtmp and self.settings.rtmp_url:
-            video_input_idx = 2 if (voice_file and voice_file.is_file()) else 1
             cmd.extend(["-f", "lavfi", "-re", "-i", "color=c=black:s=640x360:r=15"])
 
         if filter_complex:
