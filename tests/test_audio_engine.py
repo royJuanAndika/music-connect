@@ -23,11 +23,18 @@ def test_audio_engine():
     engine = AudioEngine(s)
 
     # 1. Test filter string
-    filt = engine.build_ducking_filter()
+    filt, map_hls, map_rtmp = engine.build_ducking_filter(output_hls=True, output_rtmp=True)
     assert "sidechaincompress=" in filt
     assert "apad" in filt
     assert "threshold=0.03" in filt
     assert "ratio=16" in filt
+    assert map_hls == "[out_hls]"
+    assert map_rtmp == "[out_rtmp]"
+
+    # Test RTMP only mode (should not have asplit)
+    filt_rtmp_only, _, map_rtmp_only = engine.build_ducking_filter(output_hls=False, output_rtmp=True)
+    assert "asplit" not in filt_rtmp_only
+    assert map_rtmp_only == "[out_rtmp]"
     assert "attack=15" in filt
     assert "release=600" in filt
     assert "amix=" in filt
@@ -39,13 +46,13 @@ def test_audio_engine():
     voice_file.parent.mkdir(parents=True, exist_ok=True)
     voice_file.touch()
 
+    # Case A: Both HLS and RTMP
     cmd = engine.build_ffmpeg_cmd(
         music_file=music_file,
         voice_file=voice_file,
         output_hls=True,
         output_rtmp=True,
     )
-
     cmd_str = " ".join(cmd)
     assert "-i " + str(music_file) in cmd_str
     assert "-i " + str(voice_file) in cmd_str
@@ -55,6 +62,18 @@ def test_audio_engine():
     assert "-max_muxing_queue_size 9999" in cmd_str
     assert "-fps_mode cfr" in cmd_str
     assert "asplit=2[out_hls][out_rtmp]" in cmd_str
+
+    # Case B: RTMP only (VPS mode) - should NOT have asplit
+    cmd_rtmp_only = engine.build_ffmpeg_cmd(
+        music_file=music_file,
+        voice_file=voice_file,
+        output_hls=False,
+        output_rtmp=True,
+    )
+    cmd_rtmp_str = " ".join(cmd_rtmp_only)
+    assert "asplit" not in cmd_rtmp_str
+    assert "-map [out_rtmp]" in cmd_rtmp_str
+    assert "-f hls" not in cmd_rtmp_str
 
     # Test standby command
     standby_cmd = engine.build_standby_cmd(10, output_hls=True, output_rtmp=True)

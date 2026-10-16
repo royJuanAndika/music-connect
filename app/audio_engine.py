@@ -56,26 +56,34 @@ class AudioEngine:
         info = resolve_binary("ffmpeg", self.settings.ffmpeg_path)
         return info.is_available
 
-    def build_ducking_filter(self) -> str:
+    def build_ducking_filter(self, output_hls: bool = True, output_rtmp: bool = False) -> tuple[str, str, str]:
         """Filter graph FFmpeg untuk dynamic sidechain compression (ducking).
         
         [0:a] adalah musik, [1:a] adalah suara host.
-        PENTING: [1:a]apad memastikan sidechain tidak memutus stream saat suara host habis,
-        sehingga lagu tetap diputar penuh sampai durasi musik selesai.
-        Gunakan asplit=2 agar output stream bisa dipakai bersama oleh HLS dan RTMP.
+        PENTING: [1:a]apad memastikan sidechain tidak memutus stream saat suara host habis.
+        Gunakan asplit HANYA jika output_hls dan output_rtmp aktif bersamaan.
         """
         level = self.settings.duck_level
         attack = self.settings.duck_attack_ms
         release = self.settings.duck_release_ms
 
-        filter_str = (
+        base = (
             f"[1:a]apad[pad_voice];"
             f"[0:a][pad_voice]sidechaincompress="
             f"threshold={level}:ratio=16:attack={attack}:release={release}[ducked];"
             f"[1:a]volume=1.8[v_boost];"
-            f"[ducked][v_boost]amix=inputs=2:duration=first:normalize=0:dropout_transition=0,asplit=2[out_hls][out_rtmp]"
+            f"[ducked][v_boost]amix=inputs=2:duration=first:normalize=0:dropout_transition=0"
         )
-        return filter_str
+
+        if output_hls and output_rtmp:
+            filter_str = f"{base},asplit=2[out_hls][out_rtmp]"
+            return filter_str, "[out_hls]", "[out_rtmp]"
+        elif output_rtmp:
+            filter_str = f"{base}[out_rtmp]"
+            return filter_str, "", "[out_rtmp]"
+        else:
+            filter_str = f"{base}[out_hls]"
+            return filter_str, "[out_hls]", ""
 
     def build_message_cmd(
         self,
@@ -106,18 +114,37 @@ class AudioEngine:
         level = 0.15
         attack = 150
         release = 600
-        filter_complex = [
-            f"[0:a][1:a]sidechaincompress=threshold={level}:ratio=16:attack={attack}:release={release}[ducked];"
+        base_bed = (
+            f"[1:a]apad[pad_voice];"
+            f"[0:a][pad_voice]sidechaincompress=threshold={level}:ratio=16:attack={attack}:release={release}[ducked];"
             f"[1:a]volume=1.8[v_boost];"
-            f"[ducked][v_boost]amix=inputs=2:duration=second:normalize=0:dropout_transition=0,asplit=2[out_hls][out_rtmp]"
-        ]
+            f"[ducked][v_boost]amix=inputs=2:duration=shortest:normalize=0:dropout_transition=0"
+        )
+
+        filter_complex = []
+        if output_hls and output_rtmp:
+            filter_complex.append(f"{base_bed},asplit=2[out_hls][out_rtmp]")
+            audio_map_hls = "[out_hls]"
+            audio_map_rtmp = "[out_rtmp]"
+        elif output_rtmp:
+            filter_complex.append(f"{base_bed}[out_rtmp]")
+            audio_map_hls = ""
+            audio_map_rtmp = "[out_rtmp]"
+        else:
+            filter_complex.append(f"{base_bed}[out_hls]")
+            audio_map_hls = "[out_hls]"
+            audio_map_rtmp = ""
+
         cmd.extend(["-filter_complex", ";".join(filter_complex)])
-        audio_map_hls = "[out_hls]"
-        audio_map_rtmp = "[out_rtmp]"
 
         # Input 2: Dummy video track untuk RTMPS Telegram
+        res = self.settings.rtmp_video_resolution
+        fps = self.settings.rtmp_video_fps
+        v_bitrate = self.settings.rtmp_video_bitrate
+        gop = fps * 2
+
         if output_rtmp and self.settings.rtmp_url:
-            cmd.extend(["-f", "lavfi", "-re", "-i", "color=c=black:s=640x360:r=15"])
+            cmd.extend(["-f", "lavfi", "-re", "-i", f"color=c=black:s={res}:r={fps}"])
 
         # Output HLS
         if output_hls:
@@ -150,17 +177,16 @@ class AudioEngine:
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
                 "-tune", "zerolatency",
-                "-b:v", "200k",
-                "-maxrate", "250k",
-                "-bufsize", "500k",
+                "-b:v", v_bitrate,
                 "-pix_fmt", "yuv420p",
-                "-g", "30",
-                "-keyint_min", "30",
+                "-g", str(gop),
+                "-keyint_min", str(gop),
                 "-sc_threshold", "0",
                 "-c:a", "aac",
                 "-b:a", self.settings.stream_bitrate,
                 "-ar", str(self.settings.stream_sample_rate),
                 "-ac", str(self.settings.stream_channels),
+                "-flvflags", "no_duration_filesize",
                 "-max_muxing_queue_size", "9999",
                 "-f", "flv",
                 full_rtmp,
@@ -230,14 +256,20 @@ class AudioEngine:
         has_voice = bool(voice_file and Path(voice_file).is_file())
         if has_voice:
             cmd.extend(["-i", str(voice_file)])
-            filter_complex.append(self.build_ducking_filter())
-            audio_map_hls = "[out_hls]"
-            audio_map_rtmp = "[out_rtmp]"
+            filt_str, map_hls, map_rtmp = self.build_ducking_filter(output_hls, output_rtmp)
+            filter_complex.append(filt_str)
+            audio_map_hls = map_hls
+            audio_map_rtmp = map_rtmp
 
         # Input video untuk Telegram RTMP (Input 2 jika ada voice, Input 1 jika tanpa voice)
         video_input_idx = 2 if has_voice else 1
+        res = self.settings.rtmp_video_resolution
+        fps = self.settings.rtmp_video_fps
+        v_bitrate = self.settings.rtmp_video_bitrate
+        gop = fps * 2  # keyframe tepat 2 detik
+
         if output_rtmp and self.settings.rtmp_url:
-            cmd.extend(["-f", "lavfi", "-re", "-i", "color=c=black:s=640x360:r=15"])
+            cmd.extend(["-f", "lavfi", "-re", "-i", f"color=c=black:s={res}:r={fps}"])
 
         if filter_complex:
             cmd.extend(["-filter_complex", ";".join(filter_complex)])
@@ -276,17 +308,16 @@ class AudioEngine:
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
                 "-tune", "zerolatency",
-                "-b:v", "200k",
-                "-maxrate", "250k",
-                "-bufsize", "500k",
+                "-b:v", v_bitrate,
                 "-pix_fmt", "yuv420p",
-                "-g", "30",
-                "-keyint_min", "30",
+                "-g", str(gop),
+                "-keyint_min", str(gop),
                 "-sc_threshold", "0",
                 "-c:a", "aac",
                 "-b:a", self.settings.stream_bitrate,
                 "-ar", str(self.settings.stream_sample_rate),
                 "-ac", str(self.settings.stream_channels),
+                "-flvflags", "no_duration_filesize",
                 "-max_muxing_queue_size", "9999",
                 "-f", "flv",
                 full_rtmp,
@@ -382,25 +413,31 @@ class AudioEngine:
             ])
 
         # Output RTMP
+        res = self.settings.rtmp_video_resolution
+        fps = self.settings.rtmp_video_fps
+        v_bitrate = self.settings.rtmp_video_bitrate
+        gop = fps * 2
+
         if output_rtmp and self.settings.rtmp_url:
             full_rtmp = self.settings.rtmp_url
             if self.settings.rtmp_key:
                 full_rtmp = f"{self.settings.rtmp_url.rstrip('/')}/{self.settings.rtmp_key}"
 
             cmd.extend([
-                "-f", "lavfi", "-t", str(duration_sec), "-i", "color=c=black:s=640x360:r=15",
+                "-f", "lavfi", "-t", str(duration_sec), "-i", f"color=c=black:s={res}:r={fps}",
                 "-map", "1:v",
                 "-map", "0:a",
                 "-fps_mode", "cfr",
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
                 "-tune", "zerolatency",
-                "-b:v", "150k",
+                "-b:v", v_bitrate,
                 "-pix_fmt", "yuv420p",
-                "-g", "30",
-                "-keyint_min", "30",
+                "-g", str(gop),
+                "-keyint_min", str(gop),
                 "-c:a", "aac",
                 "-b:a", self.settings.stream_bitrate,
+                "-flvflags", "no_duration_filesize",
                 "-max_muxing_queue_size", "9999",
                 "-f", "flv",
                 full_rtmp,
