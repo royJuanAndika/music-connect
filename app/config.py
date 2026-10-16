@@ -85,13 +85,13 @@ class Settings:
     llm_provider: str = "openrouter"
     llm_model: str = "openrouter/free"
     tts_engine: str = "edge-tts"
-    tts_voice: str = "id-ID-ArdiNeural"
+    tts_voice: str = "id-ID-GadisNeural"
     piper_path: str = "bin/piper.exe"
     piper_model: str = "models/id_ID-news-medium.onnx"
     host_max_chars: int = 400
-    duck_level: float = 0.25
-    duck_attack_ms: int = 200
-    duck_release_ms: int = 800
+    duck_level: float = 0.03
+    duck_attack_ms: int = 15
+    duck_release_ms: int = 600
 
     # Interaksi & Moderasi
     shoutout_enabled: bool = True

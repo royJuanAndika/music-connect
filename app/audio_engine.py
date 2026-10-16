@@ -69,7 +69,7 @@ class AudioEngine:
 
         filter_str = (
             f"[0:a][1:a]sidechaincompress="
-            f"threshold={level}:ratio=6:attack={attack}:release={release}[ducked];"
+            f"threshold={level}:ratio=14:attack={attack}:release={release}[ducked];"
             f"[ducked][1:a]amix=inputs=2:duration=first:dropout_transition=2,asplit=2[out_hls][out_rtmp]"
         )
         return filter_str

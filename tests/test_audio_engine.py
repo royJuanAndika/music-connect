@@ -16,18 +16,19 @@ def test_audio_engine():
         stream_bitrate="128k",
         rtmp_url="rtmp://live.telegram.org/app",
         rtmp_key="secretkey123",
-        duck_level=0.25,
-        duck_attack_ms=200,
-        duck_release_ms=800,
+        duck_level=0.03,
+        duck_attack_ms=15,
+        duck_release_ms=600,
     )
     engine = AudioEngine(s)
 
     # 1. Test filter string
     filt = engine.build_ducking_filter()
     assert "sidechaincompress=" in filt
-    assert "threshold=0.25" in filt
-    assert "attack=200" in filt
-    assert "release=800" in filt
+    assert "threshold=0.03" in filt
+    assert "ratio=14" in filt
+    assert "attack=15" in filt
+    assert "release=600" in filt
     assert "amix=" in filt
 
     # 2. Test command generator dengan voice host + RTMP + HLS
