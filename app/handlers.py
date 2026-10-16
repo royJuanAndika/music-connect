@@ -36,30 +36,20 @@ def _cmd(func):
     return wrapper
 
 HELP = (
-    "*Spotify Bot* \u2014 kontrol pemutar lewat Spotify Connect.\n\n"
-    "/search <judul> \u2014 cari lagu (5 hasil)\n"
-    "/queue <judul atau nomor> \u2014 tambah ke queue\n"
-    "/q <...> \u2014 alias /queue\n"
-    "/list \u2014 lihat isi queue\n"
-    "/remove <nomor> \u2014 hapus lagu dari queue\n"
-    "/now \u2014 lagu yang sedang diputar\n"
-    "/next \u2014 lagu berikutnya\n"
-    "/pause \u2014 jeda\n"
-    "/resume \u2014 lanjut\n"
-    "/device \u2014 status device pemutar\n"
-    "/status \u2014 ringkasan bot\n"
-    "/clearqueue \u2014 kosongkan queue lokal\n"
-    "/routines \u2014 daftar routine tersimpan\n"
-    "/routine <nama> \u2014 putar routine\n"
-    "/ask <teks> \u2014 tanya asisten AI\n"
-    "/help \u2014 pesan ini\n\n"
-    "\U0001f4ac Atau cukup ketik biasa (bahasa natural), contoh:\n"
-    "\u2022 \"putar lagu Hindia\"\n"
-    "\u2022 \"tambahin everything you are\"\n"
-    "\u2022 \"lagi main apa sekarang?\"\n"
-    "\u2022 \"hapus lagu nomor 2 dari queue\"\n\n"
-    "\U0001f4ce *Di grup:* tag bot atau reply pesan bot, baru dia jawab.\n"
-    "Contoh: _@bot putar lagu Hindia_  atau reply \"morning routine\"."
+    "📻 *Radio Stream AI Bot* \u2014 Stasiun Radio Live & AI Host\n\n"
+    "🎵 *Perintah Musik:*\n"
+    "• `/search <judul>` \u2014 Cari lagu & pilih via tombol inline\n"
+    "• `/request <judul atau link YT>` \u2014 Langsung putar lagu\n"
+    "• `/salam <judul> | untuk <target> | <pesan>` \u2014 Request + titip salam\n"
+    "• `/now` \u2014 Status lagu, sisa menit, & tombol cepat\n"
+    "• `/skip` \u2014 Lewati lagu yang sedang diputar\n"
+    "• `/list` \u2014 Lihat antrian & tombol dahulukan (bump)\n"
+    "• `/bump <nomor>` \u2014 Dahulukan lagu ke antrian terdepan\n"
+    "• `/remove <nomor>` \u2014 Hapus lagu dari antrian\n\n"
+    "💬 *Ngobrol dengan AI DJ:*\n"
+    "Ketik santai di grup (tag bot / reply pesan bot):\n"
+    "_@bot putar lagu Sheila on 7 Dan dan titip salam buat tim IT_\n\n"
+    "🌐 *Web Player:* http://localhost:8005"
 )
 
 
@@ -388,9 +378,11 @@ class Handlers:
             if not self.downloader or not self.downloader.is_available():
                 return await update.message.reply_text("Downloader YouTube tidak tersedia.")
 
+            status_msg = await update.message.reply_text(f"🔎 Mencari lagu YouTube untuk: _{_escape(query)}_...", parse_mode=ParseMode.MARKDOWN)
+
             tracks_meta = await _to_thread(self.downloader.search_multitracks, query, 5)
             if not tracks_meta:
-                return await update.message.reply_text(f"Tidak ada hasil untuk: *{_escape(query)}*", parse_mode=ParseMode.MARKDOWN)
+                return await status_msg.edit_text(f"Tidak ada hasil untuk: *{_escape(query)}*", parse_mode=ParseMode.MARKDOWN)
 
             # Simpan hasil untuk referensi manual /queue <nomor>
             ctx.chat_data["last_search_yt"] = tracks_meta
@@ -409,7 +401,7 @@ class Handlers:
 
             lines.append("\n_Klik tombol di bawah untuk langsung memutar:_")
             reply_markup = InlineKeyboardMarkup(keyboard)
-            return await update.message.reply_text(
+            return await status_msg.edit_text(
                 "\n".join(lines),
                 reply_markup=reply_markup,
                 parse_mode=ParseMode.MARKDOWN,
