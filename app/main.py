@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from threading import Thread
 
 from telegram import Bot, BotCommand
