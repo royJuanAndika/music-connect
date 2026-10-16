@@ -85,6 +85,8 @@ class QueueStore:
             for col, col_def in new_columns.items():
                 if col not in existing_cols:
                     self._conn.execute(f"ALTER TABLE queue ADD COLUMN {col} {col_def}")
+            # Auto-recover antrian saat startup: kembalikan item yang menggantung saat crash/restart ke pending
+            self._conn.execute("UPDATE queue SET status='pending' WHERE status='playing'")
             self._conn.commit()
 
     def check_moderation_and_quota(

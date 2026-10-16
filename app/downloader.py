@@ -59,7 +59,7 @@ class YouTubeDownloader:
             self.bin_path,
             "--no-warnings",
             "--no-check-certificates",
-            "--extractor-args", "youtube:player_client=android,web",
+            "--extractor-args", "youtube:player_client=ios,android,web",
         ]
         if self.settings.yt_cookies_file:
             cmd.extend(["--cookies", self.settings.yt_cookies_file])
