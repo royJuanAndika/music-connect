@@ -173,17 +173,18 @@ class LLMClient:
         shoutout_to: str = "semua pendengar",
         shoutout_message: str = "",
     ) -> str:
-        """Susun naskah pengumuman radio FM mandiri (pesan saja) dengan fallback template bawaan."""
+        """Susun naskah pengumuman radio FM mandiri (pesan saja) dengan template presisi bawaan."""
         max_chars = self.settings.host_max_chars
 
-        # Template fallback radio FM jika LLM offline / tanpa API key
-        target_text = f"khusus buat {shoutout_to}" if shoutout_to and shoutout_to.lower() != "semua pendengar" else "buat kawan-kawan semua"
+        # Template lugas dan manis tanpa improvisasi aneh AI
+        target_text = f"untuk {shoutout_to}" if shoutout_to and shoutout_to.lower() != "semua pendengar" else "untuk kita semua"
+        clean_msg = shoutout_message.strip()
         fallback_script = (
-            f"Halo sobat radio yang lagi standby! Ada pesan spesial nih dari {requested_by} {target_text}: "
-            f"'{shoutout_message}'. Sekian pengumuman dari kami, tetap nikmati alunan musik di radio kesayangan kamu!"
+            f"Ada titipan pesan nih dari {requested_by} {target_text}: {clean_msg}"
         )
 
-        if not self.enabled:
+        # Jika HOST_USE_LLM bernilai false (default), langsung pakai template instan 0 detik
+        if not self.settings.host_use_llm or not self.enabled:
             return fallback_script[:max_chars]
 
         persona = self.settings.host_persona
@@ -227,17 +228,25 @@ class LLMClient:
         persona = self.settings.host_persona
         max_chars = self.settings.host_max_chars
 
-        # Fallback template lokal jika LLM nonaktif / tanpa API key / error
-        target_str = f"khusus buat {shoutout_to}, " if shoutout_to and shoutout_to.lower() != "semua pendengar" else ""
-        msg_str = f"pesannya: '{shoutout_message}'. " if shoutout_message else ""
-        req_str = f"request dari {requested_by}. " if requested_by else ""
-        fallback_script = (
-            f"Halo sobat radio! Berikutnya kita puterin {current_title} oleh {current_artist}, "
-            f"{req_str}{target_str}{msg_str}Selamat mendengarkan!"
-        )[:max_chars]
+        # Template lugas, manis, dan akurat (tanpa delay AI)
+        clean_title = current_title.split("(")[0].split("[")[0].strip()
+        who = requested_by or "kawan pendengar"
+        clean_msg = shoutout_message.strip()
 
-        if not self.enabled:
-            return fallback_script
+        if clean_msg:
+            target_str = f"untuk {shoutout_to}: " if shoutout_to and shoutout_to.lower() != "semua pendengar" else ""
+            fallback_script = (
+                f"Ada titipan salam nih dari {who} {target_str}{clean_msg}. "
+                f"Spesial buat kamu, ini dia {clean_title}."
+            )
+        else:
+            fallback_script = (
+                f"Selanjutnya, lagu request dari {who}: {clean_title}. Selamat mendengarkan yaa."
+            )
+
+        # Jika HOST_USE_LLM bernilai false (default), langsung gunakan template instan
+        if not self.settings.host_use_llm or not self.enabled:
+            return fallback_script[:max_chars]
 
         prompt = (
             f"Kamu adalah Gadis, penyiar radio cewek muda yang bersuara lembut, manis, santai, dan agak manja menggemaskan.\n"

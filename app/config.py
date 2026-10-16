@@ -78,6 +78,7 @@ class Settings:
 
     # AI Host
     host_enabled: bool = True
+    host_use_llm: bool = False
     host_language: str = "id"
     host_persona: str = "Santai, ramah, bersahabat layaknya penyiar radio FM anak muda"
     host_mode: str = "every_song"
@@ -232,6 +233,7 @@ def load_settings() -> Settings:
 
         # AI Host
         host_enabled=_to_bool(os.getenv("HOST_ENABLED", "true"), default=True),
+        host_use_llm=_to_bool(os.getenv("HOST_USE_LLM", "false"), default=False),
         host_language=os.getenv("HOST_LANGUAGE", "id").strip(),
         host_persona=os.getenv(
             "HOST_PERSONA",

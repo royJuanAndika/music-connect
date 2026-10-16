@@ -33,7 +33,7 @@ def test_tts_and_fallback():
 
     script = asyncio.run(
         llm.generate_dj_script(
-            current_title="Dan",
+            current_title="Dan - Sheila on 7",
             current_artist="Sheila on 7",
             requested_by="Budi",
             shoutout_message="Salam buat anak kos",
@@ -42,6 +42,18 @@ def test_tts_and_fallback():
     # When disabled, should cleanly return robust fallback script
     assert "Sheila on 7" in script
     assert "Budi" in script
+
+    # Test announcement direct template
+    ann = asyncio.run(
+        llm.generate_announcement_script(
+            requested_by="Andika",
+            shoutout_to="Mas Irul",
+            shoutout_message="Semangat ya kerjanya",
+        )
+    )
+    assert "Andika" in ann
+    assert "Mas Irul" in ann
+    assert "Semangat ya kerjanya" in ann
 
     print("ALL TTS & DJ SCRIPT TESTS PASSED!")
 
