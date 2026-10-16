@@ -204,6 +204,8 @@ class AudioEngine:
                 stderr=subprocess.PIPE,
             )
             self._process.communicate()
+        except Exception as e:
+            log.warning(f"Error pada play_message_sync: {e}")
         finally:
             self._process = None
             self.state.is_running = False
@@ -330,9 +332,10 @@ class AudioEngine:
                 stderr=subprocess.PIPE,
             )
             _, stderr = self._process.communicate()
-            if self._process.returncode != 0 and self._process.returncode != -15:
+            proc = self._process
+            if proc and proc.returncode not in (0, -15, 255):
                 err_str = stderr.decode(errors="ignore")[-300:] if stderr else ""
-                log.warning(f"FFmpeg berhenti dengan exit code {self._process.returncode}: {err_str}")
+                log.warning(f"FFmpeg berhenti dengan exit code {proc.returncode}: {err_str}")
                 # Jika RTMP gagal (misal RTMPS Telegram putus/key kadaluarsa), coba putar ulang HLS saja agar web tetap hidup
                 if output_rtmp and "rtmp" in err_str.lower():
                     log.warning("Koneksi RTMP Telegram ditolak/terputus, melanjutkan pemutaran di Web HLS saja...")
@@ -406,13 +409,13 @@ class AudioEngine:
         return cmd
 
     def stop(self) -> None:
-        """Hentikan siaran yang sedang berjalan."""
-        if self._process:
+        """Hentikan siaran yang sedang berjalan (thread-safe, tanpa langsung menimpa _process)."""
+        proc = self._process
+        if proc:
             try:
-                self._process.terminate()
+                proc.terminate()
             except Exception:
                 pass
-            self._process = None
         self.state.is_running = False
 
     def play_standby_sync(self, duration_sec: int = 10) -> None:
