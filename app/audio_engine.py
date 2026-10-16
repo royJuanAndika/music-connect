@@ -229,7 +229,11 @@ class AudioEngine:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
-            self._process.communicate()
+            _, stderr = self._process.communicate()
+            proc = self._process
+            if proc and proc.returncode not in (0, -15, 255):
+                err_str = stderr.decode(errors="ignore")[-250:] if stderr else ""
+                log.warning(f"play_message_sync exit {proc.returncode}: {err_str}")
         except Exception as e:
             log.warning(f"Error pada play_message_sync: {e}")
         finally:
