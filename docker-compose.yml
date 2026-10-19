@@ -1,8 +1,17 @@
 services:
+  warp-proxy:
+    image: ghcr.io/mon-ius/docker-warp-socks:latest
+    container_name: warp-proxy
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:9091:9091"
+
   radio:
     build: .
     container_name: radio-stream-ai
     restart: unless-stopped
+    depends_on:
+      - warp-proxy
     env_file:
       - .env
     volumes:
