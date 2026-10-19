@@ -114,11 +114,12 @@ class AudioEngine:
         level = 0.15
         attack = 150
         release = 600
+        # PENTING: amix inputs=2:duration=first di mana input 0 adalah voice_file (melalui label [v_boost])
+        # agar durasi total tepat sama dengan panjang audio pesan suara dan tidak infinite!
         base_bed = (
-            f"[1:a]apad[pad_voice];"
-            f"[0:a][pad_voice]sidechaincompress=threshold={level}:ratio=16:attack={attack}:release={release}[ducked];"
             f"[1:a]volume=1.8[v_boost];"
-            f"[ducked][v_boost]amix=inputs=2:duration=shortest:normalize=0:dropout_transition=0"
+            f"[0:a][v_boost]sidechaincompress=threshold={level}:ratio=16:attack={attack}:release={release}[ducked];"
+            f"[v_boost][ducked]amix=inputs=2:duration=first:normalize=0:dropout_transition=0"
         )
 
         filter_complex = []
@@ -137,7 +138,7 @@ class AudioEngine:
 
         cmd.extend(["-filter_complex", ";".join(filter_complex)])
 
-        # Input 2: Dummy video track untuk RTMPS Telegram
+        # Input video untuk Telegram RTMP
         res = self.settings.rtmp_video_resolution
         fps = self.settings.rtmp_video_fps
         v_bitrate = self.settings.rtmp_video_bitrate
@@ -236,6 +237,11 @@ class AudioEngine:
             if proc and proc.returncode not in (0, -15, 255):
                 err_str = stderr.decode(errors="ignore")[-250:] if stderr else ""
                 log.warning(f"play_message_sync exit {proc.returncode}: {err_str}")
+                # Fallback jika RTMP gagal, putar HLS saja
+                if output_rtmp and "rtmp" in err_str.lower():
+                    fallback_cmd = self.build_message_cmd(voice_file, bed_file if bed_file.is_file() else None, output_hls=True, output_rtmp=False)
+                    self._process = subprocess.Popen(fallback_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                    self._process.communicate()
         except Exception as e:
             log.warning(f"Error pada play_message_sync: {e}")
         finally:
