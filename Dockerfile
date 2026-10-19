@@ -9,7 +9,13 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Pasang Deno resmi untuk JS challenge solver yt-dlp
+RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip -o /tmp/deno.zip \
+    && unzip -o /tmp/deno.zip -d /usr/local/bin \
+    && rm /tmp/deno.zip
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt yt-dlp edge-tts
