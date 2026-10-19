@@ -193,11 +193,7 @@ class AudioEngine:
                 "-shortest",
                 "-flvflags", "no_duration_filesize",
                 "-max_muxing_queue_size", "9999",
-                "-f", "fifo",
-                "-fifo_format", "flv",
-                "-drop_pkts_on_overflow", "1",
-                "-attempt_recovery", "1",
-                "-recovery_wait_time", "1",
+                "-f", "flv",
                 full_rtmp,
             ])
 
@@ -339,11 +335,7 @@ class AudioEngine:
                 "-ac", str(self.settings.stream_channels),
                 "-flvflags", "no_duration_filesize",
                 "-max_muxing_queue_size", "9999",
-                "-f", "fifo",
-                "-fifo_format", "flv",
-                "-drop_pkts_on_overflow", "1",
-                "-attempt_recovery", "1",
-                "-recovery_wait_time", "1",
+                "-f", "flv",
                 full_rtmp,
             ])
 
@@ -465,11 +457,7 @@ class AudioEngine:
                 "-b:a", self.settings.stream_bitrate,
                 "-flvflags", "no_duration_filesize",
                 "-max_muxing_queue_size", "9999",
-                "-f", "fifo",
-                "-fifo_format", "flv",
-                "-drop_pkts_on_overflow", "1",
-                "-attempt_recovery", "1",
-                "-recovery_wait_time", "1",
+                "-f", "flv",
                 full_rtmp,
             ])
 
