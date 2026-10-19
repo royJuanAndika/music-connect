@@ -101,6 +101,7 @@ class Settings:
     shoutout_enabled: bool = True
     shoutout_max_chars: int = 200
     request_cooldown_sec: int = 30
+    message_cooldown_sec: int = 100
     max_queue_per_user: int = 3
     max_queue_total: int = 20
     banned_words: tuple[str, ...] = ()
@@ -262,6 +263,7 @@ def load_settings() -> Settings:
         shoutout_enabled=_to_bool(os.getenv("SHOUTOUT_ENABLED", "true"), default=True),
         shoutout_max_chars=int(os.getenv("SHOUTOUT_MAX_CHARS", "200")),
         request_cooldown_sec=int(os.getenv("REQUEST_COOLDOWN_SEC", "30")),
+        message_cooldown_sec=int(os.getenv("MESSAGE_COOLDOWN_SEC", "300")),
         max_queue_per_user=int(os.getenv("MAX_QUEUE_PER_USER", "3")),
         max_queue_total=int(os.getenv("MAX_QUEUE_TOTAL", "20")),
         banned_words=_split_words(os.getenv("BANNED_WORDS", "")),

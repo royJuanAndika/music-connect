@@ -16,59 +16,108 @@ def test_handlers_and_tools():
         max_queue_total=20,
         request_cooldown_sec=0,
     )
-    db_path = Path("data/test_handlers_queue.db")
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    if db_path.exists():
-        db_path.unlink()
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test_handlers_queue.db"
+        qs = QueueStore(db_path)
 
-    qs = QueueStore(db_path)
+        ctx = ToolContext(
+            settings=s,
+            spotify=None,  # type: ignore
+            queue=qs,
+            watchdog=None,  # type: ignore
+            chat_id=123,
+            requested_by="Alice",
+        )
 
-    ctx = ToolContext(
-        settings=s,
+        # 1. Test run_queue in youtube radio mode with shoutout
+        from unittest.mock import patch, MagicMock
+        with patch("app.downloader.YouTubeDownloader") as mock_dl_cls:
+            mock_dl = mock_dl_cls.return_value
+            mock_dl.is_available.return_value = True
+            mock_meta = MagicMock()
+            mock_meta.video_id = "mock123"
+            mock_meta.title = "Dewa 19 Kangen"
+            mock_meta.uploader = "Dewa 19"
+            mock_meta.webpage_url = "https://youtube.com/watch?v=mock123"
+            mock_meta.duration_sec = 240
+            mock_dl.resolve_query.return_value = mock_meta
+
+            res = run_queue(ctx, query="Dewa 19 Kangen", shoutout="Salam buat keluarga di Surabaya")
+            assert "error" not in res, f"Expected no error, got: {res}"
+            assert res.get("radio_mode") is True
+            assert res.get("shoutout") == "Salam buat keluarga di Surabaya"
+            assert res.get("queue_position") == 1
+
+        # 2. Check stored item in SQLite
+        items = qs.list(chat_id=123)
+        assert len(items) == 1
+        assert items[0].title == "Dewa 19 Kangen"
+        assert items[0].shoutout_message == "Salam buat keluarga di Surabaya"
+        assert items[0].source_type == "youtube"
+
+        # 3. Test source_type='message' addition and bump
+        msg_id = qs.add(
+            chat_id=123,
+            track_uri="msg:test",
+            title="📢 Pengumuman Radio",
+            artist="Admin",
+            duration_ms=0,
+            requested_by="AdminRoy",
+            source_type="message",
+            shoutout_to="Semua Pegawai",
+            shoutout_message="Jangan lupa meeting jam 2",
+        )
+        assert msg_id > 0
+        ok = qs.bump_to_front(msg_id)
+        assert ok is True
+        popped = qs.pop_next(chat_id=123)
+        assert popped.id == msg_id
+        assert popped.source_type == "message"
+        assert popped.shoutout_to == "Semua Pegawai"
+
+        qs.close()
+
+    # 4. Test cooldown logic on handlers
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    from app.handlers import Handlers
+
+    handlers = Handlers(
+        settings=Settings(
+            allowed_telegram_ids=(999,),
+            message_cooldown_sec=300,
+        ),
         spotify=None,  # type: ignore
-        queue=qs,
+        queue=MagicMock(),
         watchdog=None,  # type: ignore
-        chat_id=123,
-        requested_by="Alice",
     )
 
-    # 1. Test run_queue in youtube radio mode with shoutout
-    res = run_queue(ctx, query="Dewa 19 Kangen", shoutout="Salam buat keluarga di Surabaya")
-    assert "error" not in res, f"Expected no error, got: {res}"
-    assert res.get("radio_mode") is True
-    assert res.get("shoutout") == "Salam buat keluarga di Surabaya"
-    assert res.get("queue_position") == 1
+    update = MagicMock()
+    update.effective_chat.type = "group"
+    update.effective_chat.id = -100123
+    update.effective_user.id = 111
+    update.effective_user.username = "listener"
+    update.message.reply_text = AsyncMock()
 
-    # 2. Check stored item in SQLite
-    items = qs.list(chat_id=123)
-    assert len(items) == 1
-    assert items[0].title == "Dewa 19 Kangen"
-    assert items[0].shoutout_message == "Salam buat keluarga di Surabaya"
-    assert items[0].source_type == "youtube"
+    ctx = MagicMock()
+    ctx.args = ["Halo", "semua"]
 
-    # 3. Test source_type='message' addition and bump
-    msg_id = qs.add(
-        chat_id=123,
-        track_uri="msg:test",
-        title="📢 Pengumuman Radio",
-        artist="Admin",
-        duration_ms=0,
-        requested_by="AdminRoy",
-        source_type="message",
-        shoutout_to="Semua Pegawai",
-        shoutout_message="Jangan lupa meeting jam 2",
-    )
-    assert msg_id > 0
-    ok = qs.bump_to_front(msg_id)
-    assert ok is True
-    popped = qs.pop_next(chat_id=123)
-    assert popped.id == msg_id
-    assert popped.source_type == "message"
-    assert popped.shoutout_to == "Semua Pegawai"
+    # First call: succeeds
+    asyncio.run(handlers.cmd_pesan(update, ctx))
+    assert handlers.queue.add.called
+    assert update.message.reply_text.called
+    first_reply = update.message.reply_text.call_args[0][0]
+    assert "Pengumuman Disiarkan" in first_reply
 
-    qs.close()
-    if db_path.exists():
-        db_path.unlink()
+    # Second call immediately: rejected by 5 min cooldown
+    update.message.reply_text.reset_mock()
+    handlers.queue.add.reset_mock()
+    asyncio.run(handlers.cmd_pesan(update, ctx))
+    assert not handlers.queue.add.called
+    second_reply = update.message.reply_text.call_args[0][0]
+    assert "Harap tunggu" in second_reply
+    assert "menit" in second_reply
 
     print("ALL HANDLER & TOOL TESTS PASSED!")
 
