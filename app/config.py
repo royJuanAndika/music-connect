@@ -74,8 +74,8 @@ class Settings:
     rtmp_url: str = ""
     rtmp_key: str = ""
     rtmp_video_resolution: str = "320x240"
-    rtmp_video_fps: int = 5
-    rtmp_video_bitrate: str = "30k"
+    rtmp_video_fps: int = 15
+    rtmp_video_bitrate: str = "100k"
     web_port: int = 8000
     ffmpeg_path: str = "bin/ffmpeg.exe"
 
@@ -232,8 +232,8 @@ def load_settings() -> Settings:
         rtmp_url=os.getenv("RTMP_URL", "").strip(),
         rtmp_key=os.getenv("RTMP_KEY", "").strip(),
         rtmp_video_resolution=os.getenv("RTMP_VIDEO_RESOLUTION", "320x240").strip(),
-        rtmp_video_fps=int(os.getenv("RTMP_VIDEO_FPS", "5")),
-        rtmp_video_bitrate=os.getenv("RTMP_VIDEO_BITRATE", "30k").strip(),
+        rtmp_video_fps=int(os.getenv("RTMP_VIDEO_FPS", "15")),
+        rtmp_video_bitrate=os.getenv("RTMP_VIDEO_BITRATE", "100k").strip(),
         web_port=int(os.getenv("WEB_PORT", "8000")),
         ffmpeg_path=os.getenv("FFMPEG_PATH", "bin/ffmpeg.exe").strip(),
 
