@@ -72,7 +72,7 @@ class AudioEngine:
             f"[0:a][pad_voice]sidechaincompress="
             f"threshold={level}:ratio=16:attack={attack}:release={release}[ducked];"
             f"[1:a]volume=1.8[v_boost];"
-            f"[ducked][v_boost]amix=inputs=2:duration=first:normalize=0:dropout_transition=0"
+            f"[ducked][v_boost]amix=inputs=2:duration=first:dropout_transition=0,volume=2.0"
         )
 
         if output_hls and output_rtmp:
@@ -119,7 +119,7 @@ class AudioEngine:
         base_bed = (
             f"[1:a]volume=1.8[v_boost];"
             f"[0:a][v_boost]sidechaincompress=threshold={level}:ratio=16:attack={attack}:release={release}[ducked];"
-            f"[v_boost][ducked]amix=inputs=2:duration=first:normalize=0:dropout_transition=0"
+            f"[v_boost][ducked]amix=inputs=2:duration=first:dropout_transition=0,volume=2.0"
         )
 
         filter_complex = []

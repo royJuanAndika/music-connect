@@ -28,6 +28,7 @@ def test_audio_engine():
     assert "apad" in filt
     assert "threshold=0.03" in filt
     assert "ratio=16" in filt
+    assert "volume=2.0" in filt
     assert map_hls == "[out_hls]"
     assert map_rtmp == "[out_rtmp]"
 
