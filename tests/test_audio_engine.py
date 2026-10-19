@@ -58,7 +58,9 @@ def test_audio_engine():
     assert "-i " + str(voice_file) in cmd_str
     assert "-filter_complex" in cmd_str
     assert "-f hls" in cmd_str
-    assert "-f flv rtmp://live.telegram.org/app/secretkey123" in cmd_str
+    assert "-f fifo -fifo_format flv" in cmd_str
+    assert "-drop_pkts_on_overflow 1" in cmd_str
+    assert "rtmp://live.telegram.org/app/secretkey123" in cmd_str
     assert "-max_muxing_queue_size 9999" in cmd_str
     assert "-fps_mode cfr" in cmd_str
     assert "-maxrate 100k" in cmd_str
@@ -76,12 +78,13 @@ def test_audio_engine():
     assert "asplit" not in cmd_rtmp_str
     assert "-map [out_rtmp]" in cmd_rtmp_str
     assert "-f hls" not in cmd_rtmp_str
+    assert "-f fifo -fifo_format flv" in cmd_rtmp_str
 
     # Test standby command
     standby_cmd = engine.build_standby_cmd(10, output_hls=True, output_rtmp=True)
     standby_str = " ".join(standby_cmd)
     assert "anullsrc=" in standby_str
-    assert "-f flv" in standby_str
+    assert "-f fifo -fifo_format flv" in standby_str
     assert "-maxrate 100k" in standby_str
     assert "-bufsize 200k" in standby_str
 
