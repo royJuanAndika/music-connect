@@ -37,7 +37,7 @@ BOT_COMMANDS = [
     BotCommand("search", "Cari lagu YouTube & pilih tombol"),
     BotCommand("request", "Request lagu (judul atau URL YouTube)"),
     BotCommand("salam", "Request + titip salam (judul | salam)"),
-    BotCommand("pesan", "Siarkan pesan pengumuman suara (Khusus Admin)"),
+    BotCommand("pesan", "Siarkan pesan pengumuman suara"),
     BotCommand("skip", "Lewati lagu yang sedang diputar"),
     BotCommand("bump", "Dahulukan lagu ke urutan depan (nomor)"),
     BotCommand("now", "Lagu & sisa durasi siaran saat ini"),

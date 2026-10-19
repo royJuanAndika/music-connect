@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -92,6 +93,7 @@ class Handlers:
         self.memory = memory  # MemoryStore | None
         self.audio_engine = None  # AudioEngine | None
         self.downloader = None  # YouTubeDownloader | None
+        self._last_pesan_time: dict[int, float] = {}  # user_id -> timestamp
 
     def set_radio_components(self, audio_engine, downloader) -> None:
         self.audio_engine = audio_engine
@@ -800,17 +802,31 @@ class Handlers:
 
     @_cmd
     async def cmd_pesan(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        """Kirim pengumuman suara siaran mandiri (Khusus Admin):
+        """Kirim pengumuman suara siaran mandiri:
         Format: /pesan untuk <Target> | <Isi Pesan>
         Atau: /pesan <Isi Pesan>
         """
+        if not self._allowed(update):
+            return await self._deny(update)
+
         user = update.effective_user
-        if not user or user.id not in self.settings.allowed_telegram_ids:
-            return await update.message.reply_text(
-                "⛔ *Akses Ditolak:* Perintah siaran pengumuman mandiri (`/pesan`) hanya dapat digunakan oleh Admin.\n"
-                "Untuk pendengar, gunakan `/salam <Lagu> | <Pesan>`.",
-                parse_mode=ParseMode.MARKDOWN,
-            )
+        user_id = user.id if user else 0
+        is_admin = bool(user and user.id in self.settings.allowed_telegram_ids)
+
+        # Cooldown check (5 menit default, lewati jika admin)
+        if not is_admin and user_id:
+            now = time.time()
+            last_time = self._last_pesan_time.get(user_id, 0.0)
+            elapsed = now - last_time
+            if elapsed < self.settings.message_cooldown_sec:
+                rem_sec = int(self.settings.message_cooldown_sec - elapsed)
+                rem_min = rem_sec // 60
+                rem_rem_sec = rem_sec % 60
+                wait_text = f"{rem_min} menit {rem_rem_sec} detik" if rem_min > 0 else f"{rem_sec} detik"
+                return await update.message.reply_text(
+                    f"⏳ Harap tunggu *{wait_text}* sebelum mengirim `/pesan` berikutnya.",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
 
         raw = " ".join(ctx.args).strip()
         if not raw:
@@ -830,13 +846,17 @@ class Handlers:
             shoutout_to = "semua pendengar"
             shoutout = raw
 
-        who = f"@{user.username}" if user.username else (user.first_name or "Admin")
+        who = f"@{user.username}" if (user and user.username) else ((user.first_name if user else "Anonim") or "Anonim")
+
+        # Catat waktu pengiriman untuk cooldown
+        if user_id:
+            self._last_pesan_time[user_id] = time.time()
 
         item_id = self.queue.add(
             chat_id=update.effective_chat.id if update.effective_chat else 0,
             track_uri="msg:announcement",
             title="📢 Pengumuman Radio",
-            artist=f"Admin {who}",
+            artist=f"{who}",
             duration_ms=0,
             requested_by=who,
             source_type="message",
@@ -861,7 +881,7 @@ class Handlers:
         )
 
         await update.message.reply_text(
-            f"📢 *Pengumuman Admin Disiarkan!*\n"
+            f"📢 *Pengumuman Disiarkan!*\n"
             f"🎯 Untuk: *{_escape(shoutout_to)}*\n"
             f"💌 Pesan: \"_{_escape(shoutout)}_\"\n\n"
             f"{status_notice}",
