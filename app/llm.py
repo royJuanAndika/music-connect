@@ -10,7 +10,10 @@ import asyncio
 import json
 import logging
 
-import httpx
+try:
+    import httpx
+except ImportError:
+    httpx = None  # type: ignore
 
 from .config import Settings
 from .tools import TOOLS_BY_NAME, ToolContext, openai_tool_schemas
@@ -58,7 +61,7 @@ class LLMError(RuntimeError):
 class LLMClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._client = httpx.AsyncClient(timeout=45.0)
+        self._client = httpx.AsyncClient(timeout=45.0) if httpx else None
 
     @property
     def enabled(self) -> bool:
@@ -69,8 +72,9 @@ class LLMClient:
         headers = {
             "Authorization": f"Bearer {self.settings.openrouter_api_key}",
             "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         }
-        # header opsional khusus OpenRouter; gateway lain (mis. 9router) bisa
+        # header opsional khusus OpenRouter; gateway lain (mis. 9router/cloudflare) bisa
         # menolak header tak dikenal, jadi hanya kirim kalau ke openrouter.ai.
         if "openrouter.ai" in self.settings.openrouter_base_url:
             headers["HTTP-Referer"] = "https://github.com/spotify-tg-bot"
@@ -78,11 +82,12 @@ class LLMClient:
         payload = {
             "model": self.settings.openrouter_model,
             "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto",
             "temperature": 0.3,
             "stream": False,
         }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
         try:
             resp = await self._client.post(url, headers=headers, json=payload)
         except httpx.HTTPError as exc:
@@ -105,9 +110,21 @@ class LLMClient:
             raise LLMError(
                 f"Respons bukan JSON (content-type={ctype!r}): {body[:200]}"
             ) from exc
-        if "choices" not in data or not data["choices"]:
-            raise LLMError(f"Respons LLM aneh: {str(data)[:300]}")
-        return data["choices"][0]["message"]
+
+        # Ekstrak choices
+        choices = data.get("choices")
+        if not choices:
+            raise LLMError(f"Respons LLM tidak memiliki choices: {str(data)[:300]}")
+
+        message = choices[0].get("message")
+        if not message:
+            raise LLMError(f"Choices LLM tidak memiliki message: {str(data)[:300]}")
+
+        # Jika LLM deepseek reasoning memasukkan jawaban di content atau reasoning
+        if not message.get("content") and message.get("reasoning_content"):
+            message["content"] = message["reasoning_content"]
+
+        return message
 
     @staticmethod
     def _parse_sse(body: str) -> dict:
@@ -149,6 +166,123 @@ class LLMClient:
         if tool_calls:
             message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
         return message
+
+    async def generate_announcement_script(
+        self,
+        requested_by: str = "Admin",
+        shoutout_to: str = "semua pendengar",
+        shoutout_message: str = "",
+    ) -> str:
+        """Susun naskah pengumuman radio FM mandiri (pesan saja) dengan template presisi bawaan."""
+        max_chars = self.settings.host_max_chars
+
+        # Template lugas dan manis tanpa improvisasi aneh AI
+        target_text = f"untuk {shoutout_to}" if shoutout_to and shoutout_to.lower() != "semua pendengar" else "untuk kita semua"
+        clean_msg = shoutout_message.strip()
+        fallback_script = (
+            f"Ada titipan pesan nih dari {requested_by} {target_text}: {clean_msg}"
+        )
+
+        # Jika HOST_USE_LLM bernilai false (default), langsung pakai template instan 0 detik
+        if not self.settings.host_use_llm or not self.enabled:
+            return fallback_script[:max_chars]
+
+        persona = self.settings.host_persona
+        prompt = (
+            f"Kamu adalah Penyiar Radio FM bernama DJ Connect. Persona: {persona}.\n"
+            f"Ada pengumuman / pesan siaran masuk dari: {requested_by}.\n"
+            f"Ditujukan untuk: {shoutout_to}.\n"
+            f"Isi pengumuman: \"{shoutout_message}\".\n\n"
+            f"TUGAS:\n"
+            f"Buat naskah penyiar radio FM yang luwes, akrab, dan santai untuk membacakan pesan tersebut "
+            f"sebagai selingan siaran (intermezzo). Maksimal {max_chars} karakter tanpa tanda petik."
+        )
+
+        messages = [
+            {"role": "system", "content": "Kamu adalah Penyiar Radio FM Indonesia yang ramah dan akrab."},
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            msg = await self._chat(messages, tools=[])
+            script = msg.get("content", "").strip().strip('"\'')
+            if script:
+                if len(script) > max_chars:
+                    script = script[:max_chars].rsplit(" ", 1)[0] + "..."
+                return script
+        except Exception as e:
+            log.warning(f"Gagal generate naskah pengumuman via LLM ({e}), menggunakan fallback template.")
+
+        return fallback_script[:max_chars]
+
+    async def generate_dj_script(
+        self,
+        current_title: str,
+        current_artist: str,
+        requested_by: str = "",
+        shoutout_to: str = "",
+        shoutout_message: str = "",
+        time_context: str = "",
+    ) -> str:
+        """Susun naskah siaran penyiar radio FM otomatis untuk lagu berikutnya."""
+        persona = self.settings.host_persona
+        max_chars = self.settings.host_max_chars
+
+        # Template lugas, manis, dan akurat (tanpa delay AI)
+        clean_title = current_title.split("(")[0].split("[")[0].strip()
+        who = requested_by or "kawan pendengar"
+        clean_msg = shoutout_message.strip()
+
+        if clean_msg:
+            target_str = f"untuk {shoutout_to}: " if shoutout_to and shoutout_to.lower() != "semua pendengar" else ""
+            fallback_script = (
+                f"Ada titipan salam nih dari {who} {target_str}{clean_msg}. "
+                f"Spesial buat kamu, ini dia {clean_title}."
+            )
+        else:
+            fallback_script = (
+                f"Selanjutnya, lagu request dari {who}: {clean_title}. Selamat mendengarkan yaa."
+            )
+
+        # Jika HOST_USE_LLM bernilai false (default), langsung gunakan template instan
+        if not self.settings.host_use_llm or not self.enabled:
+            return fallback_script[:max_chars]
+
+        prompt = (
+            f"Kamu adalah Gadis, penyiar radio cewek muda yang bersuara lembut, manis, santai, dan agak manja menggemaskan.\n"
+            f"Waktu siaran: {time_context or 'Sekarang'}.\n"
+            f"Lagu berikutnya yang akan diputar: {current_title} oleh {current_artist}.\n"
+        )
+        if requested_by:
+            prompt += f"Lagu di-request oleh: {requested_by}.\n"
+        if shoutout_to:
+            prompt += f"Salam ini ditujukan KHUSUS UNTUK: {shoutout_to}.\n"
+        if shoutout_message:
+            prompt += f"Isi pesan salam: \"{shoutout_message}\".\n"
+
+        prompt += (
+            f"\nTUGAS:\n"
+            f"Buat naskah opening siaran radio yang manis, lembut, santai, dan agak manja khas cewek penyiar radio anak muda dalam Bahasa Indonesia. "
+            f"Sapa pendengar dengan manis, bacakan titip salamnya dengan hangat dan manja, lalu ajak dengerin lagunya.\n"
+            f"Panjang maksimal {max_chars} karakter. Jangan gunakan tanda petik pembuka/penutup."
+        )
+
+        messages = [
+            {"role": "system", "content": "Kamu adalah Gadis, penyiar radio wanita Indonesia yang bertutur kata manis, lembut, santai, dan manja."},
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            msg = await self._chat(messages, tools=[])
+            script = msg.get("content", "").strip().strip('"\'')
+            if script:
+                if len(script) > max_chars:
+                    script = script[:max_chars].rsplit(" ", 1)[0] + "..."
+                return script
+        except Exception as e:
+            log.warning(f"Gagal generate naskah DJ via LLM ({e}), memakai fallback template.")
+
+        return fallback_script
 
     async def run(
         self,

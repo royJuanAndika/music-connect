@@ -4,7 +4,7 @@ from __future__ import annotations
 import functools
 import logging
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
@@ -36,30 +36,20 @@ def _cmd(func):
     return wrapper
 
 HELP = (
-    "*Spotify Bot* \u2014 kontrol pemutar lewat Spotify Connect.\n\n"
-    "/search <judul> \u2014 cari lagu (5 hasil)\n"
-    "/queue <judul atau nomor> \u2014 tambah ke queue\n"
-    "/q <...> \u2014 alias /queue\n"
-    "/list \u2014 lihat isi queue\n"
-    "/remove <nomor> \u2014 hapus lagu dari queue\n"
-    "/now \u2014 lagu yang sedang diputar\n"
-    "/next \u2014 lagu berikutnya\n"
-    "/pause \u2014 jeda\n"
-    "/resume \u2014 lanjut\n"
-    "/device \u2014 status device pemutar\n"
-    "/status \u2014 ringkasan bot\n"
-    "/clearqueue \u2014 kosongkan queue lokal\n"
-    "/routines \u2014 daftar routine tersimpan\n"
-    "/routine <nama> \u2014 putar routine\n"
-    "/ask <teks> \u2014 tanya asisten AI\n"
-    "/help \u2014 pesan ini\n\n"
-    "\U0001f4ac Atau cukup ketik biasa (bahasa natural), contoh:\n"
-    "\u2022 \"putar lagu Hindia\"\n"
-    "\u2022 \"tambahin everything you are\"\n"
-    "\u2022 \"lagi main apa sekarang?\"\n"
-    "\u2022 \"hapus lagu nomor 2 dari queue\"\n\n"
-    "\U0001f4ce *Di grup:* tag bot atau reply pesan bot, baru dia jawab.\n"
-    "Contoh: _@bot putar lagu Hindia_  atau reply \"morning routine\"."
+    "📻 *Radio Stream AI Bot* \u2014 Stasiun Radio Live & AI Host\n\n"
+    "🎵 *Perintah Musik:*\n"
+    "• `/search <judul>` \u2014 Cari lagu & pilih via tombol inline\n"
+    "• `/request <judul atau link YT>` \u2014 Langsung putar lagu\n"
+    "• `/salam <judul> | untuk <target> | <pesan>` \u2014 Request + titip salam\n"
+    "• `/now` \u2014 Status lagu, sisa menit, & tombol cepat\n"
+    "• `/skip` \u2014 Lewati lagu yang sedang diputar\n"
+    "• `/list` \u2014 Lihat antrian & tombol dahulukan (bump)\n"
+    "• `/bump <nomor>` \u2014 Dahulukan lagu ke antrian terdepan\n"
+    "• `/remove <nomor>` \u2014 Hapus lagu dari antrian\n\n"
+    "💬 *Ngobrol dengan AI DJ:*\n"
+    "Ketik santai di grup (tag bot / reply pesan bot):\n"
+    "_@bot putar lagu Sheila on 7 Dan dan titip salam buat tim IT_\n\n"
+    "🌐 *Web Player:* http://localhost:8005"
 )
 
 
@@ -100,6 +90,185 @@ class Handlers:
         self.watchdog = watchdog
         self.llm = llm  # LLMClient | None
         self.memory = memory  # MemoryStore | None
+        self.audio_engine = None  # AudioEngine | None
+        self.downloader = None  # YouTubeDownloader | None
+
+    def set_radio_components(self, audio_engine, downloader) -> None:
+        self.audio_engine = audio_engine
+        self.downloader = downloader
+
+    async def handle_callback(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Handler event klik tombol Inline Keyboard."""
+        query = update.callback_query
+        if not query:
+            return
+
+        data = query.data or ""
+        user = query.from_user
+        who = f"@{user.username}" if user.username else (user.first_name or str(user.id))
+
+        # 1. Action: Refresh now-playing
+        if data == "act:refresh":
+            await query.answer("Memperbarui status...")
+            if self.settings.music_source == "youtube" and self.audio_engine:
+                st = self.audio_engine.state
+                status_text = "🟢 Sedang Mengudara" if st.is_running else "⚪ Menunggu Siaran"
+                host_text = "\n🎙️ *Host AI:* Sedang bicara" if st.is_host_speaking else ""
+                shout_text = f"\n💌 *Salam:* \"_{_escape(st.current_shoutout)}_\"" if st.current_shoutout else ""
+                duration_text = ""
+                if st.is_running and st.duration_sec > 0:
+                    el_min, el_sec = divmod(st.elapsed_sec, 60)
+                    rem_min, rem_sec = divmod(st.remaining_sec, 60)
+                    tot_min, tot_sec = divmod(st.duration_sec, 60)
+                    duration_text = (
+                        f"\n⏱️ *Durasi:* `{el_min:02d}:{el_sec:02d}` / `{tot_min:02d}:{tot_sec:02d}` "
+                        f"(sisa: `-{rem_min:02d}:{rem_sec:02d}`)"
+                    )
+                keyboard = [
+                    [
+                        InlineKeyboardButton("⏭ Skip", callback_data="act:skip"),
+                        InlineKeyboardButton("📜 Antrian", callback_data="act:list"),
+                        InlineKeyboardButton("🔄 Refresh", callback_data="act:refresh"),
+                    ]
+                ]
+                text = (
+                    f"*Status Radio:* {status_text}\n"
+                    f"*Lagu:* {_escape(st.current_title)} — {_escape(st.current_artist)}"
+                    f"{duration_text}{host_text}{shout_text}"
+                )
+                try:
+                    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
+                except Exception:
+                    pass
+            return
+
+        # 2. Action: Skip track
+        if data == "act:skip":
+            if self.settings.music_source == "youtube" and self.audio_engine:
+                if not self.audio_engine.state.is_running:
+                    return await query.answer("Tidak ada lagu yang sedang diputar.", show_alert=True)
+                cur_title = self.audio_engine.state.current_title
+                self.audio_engine.stop()
+                await query.answer("Lagu di-skip!")
+                if query.message:
+                    await query.message.reply_text(
+                        f"⏭ *Lagu di-skip oleh {who}:* {_escape(cur_title)}\nMemutar lagu berikutnya...",
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+            return
+
+        # 3. Action: Lihat antrian
+        if data == "act:list":
+            await query.answer()
+            items = self.queue.list(status="pending")
+            if not items:
+                if query.message:
+                    await query.message.reply_text("Antrian lagu saat ini kosong.")
+                return
+            lines = ["*Queue sekarang:*"]
+            keyboard = []
+            for i, it in enumerate(items, 1):
+                lines.append(_fmt_item(i, it))
+                if i <= 5:
+                    short_title = it.title[:20] + "..." if len(it.title) > 23 else it.title
+                    keyboard.append([
+                        InlineKeyboardButton(f"⚡ #{i} ({short_title})", callback_data=f"act:bump:{it.id}"),
+                        InlineKeyboardButton(f"🗑️ #{i}", callback_data=f"act:del:{it.id}"),
+                    ])
+            lines.append("\n_Pilih tombol untuk mendahulukan (⚡) atau menghapus (🗑️):_")
+            if query.message:
+                await query.message.reply_text(
+                    "\n".join(lines),
+                    reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+            return
+
+        # 3b. Action: Bump track dari tombol
+        if data.startswith("act:bump:"):
+            item_id = int(data[len("act:bump:"):])
+            ok = self.queue.bump_to_front(item_id)
+            if ok:
+                await query.answer("Lagu didahulukan ke urutan #1!")
+                if query.message:
+                    await query.message.reply_text(f"⚡ Lagu #{item_id} berhasil didahulukan oleh {who}!")
+            else:
+                await query.answer("Gagal memindahkan lagu.", show_alert=True)
+            return
+
+        # 3c. Action: Delete track dari tombol
+        if data.startswith("act:del:"):
+            item_id = int(data[len("act:del:"):])
+            ok = self.queue.remove(item_id)
+            if ok:
+                await query.answer("Lagu dihapus dari antrian!")
+                if query.message:
+                    await query.message.reply_text(f"🗑️ Lagu #{item_id} dihapus dari antrian oleh {who}.")
+            else:
+                await query.answer("Lagu tidak ditemukan / sudah terhapus.", show_alert=True)
+            return
+
+        # 4. Action: Queue track dari tombol search YouTube (qyt:<video_id>)
+        if data.startswith("qyt:"):
+            video_id = data[len("qyt:"):]
+            from .downloader import DownloaderError
+            from .queue_store import QueueValidationError
+
+            try:
+                self.queue.check_moderation_and_quota(
+                    requested_by=who,
+                    text_to_check="",
+                    banned_words=self.settings.banned_words,
+                    max_user_quota=self.settings.max_queue_per_user,
+                    max_total_quota=self.settings.max_queue_total,
+                    cooldown_sec=self.settings.request_cooldown_sec,
+                )
+            except QueueValidationError as e:
+                return await query.answer(str(e), show_alert=True)
+
+            title = f"YouTube {video_id}"
+            artist = "YouTube"
+            url = f"https://www.youtube.com/watch?v={video_id}"
+            dur_ms = 0
+
+            # Cek di cache pencarian terakhir jika ada
+            yt_tracks = ctx.chat_data.get("last_search_yt") or []
+            for t in yt_tracks:
+                if t.video_id == video_id:
+                    title = t.title
+                    artist = t.uploader
+                    url = t.webpage_url
+                    dur_ms = t.duration_sec * 1000
+                    break
+
+            if dur_ms == 0 and self.downloader:
+                try:
+                    meta = await _to_thread(self.downloader.resolve_query, url)
+                    title = meta.title
+                    artist = meta.uploader
+                    dur_ms = meta.duration_sec * 1000
+                except DownloaderError:
+                    pass
+
+            item_id = self.queue.add(
+                chat_id=query.message.chat.id if query.message else 0,
+                track_uri=f"yt:{video_id}",
+                title=title,
+                artist=artist,
+                duration_ms=dur_ms,
+                requested_by=who,
+                source_type="youtube",
+                source_url=url,
+            )
+            pos = self.queue.count(status="pending")
+            await query.answer("Lagu berhasil ditambahkan!")
+            if query.message:
+                await query.message.reply_text(
+                    f"📻 Ditambahkan oleh {who}: *{_escape(title)}* — {_escape(artist)}\n"
+                    f"Posisi antrian: #{pos}",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
+            return
 
     # ---- guard ----
     def _allowed(self, update: Update) -> bool:
@@ -165,7 +334,22 @@ class Handlers:
     async def cmd_status(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
             return await self._deny(update)
-        dev = "\u2705 online" if self.watchdog.online else "\u26a0\ufe0f offline"
+
+        if self.settings.music_source == "youtube" and self.audio_engine:
+            st = self.audio_engine.state
+            status_text = "🟢 Sedang Mengudara" if st.is_running else "⚪ Standby"
+            n_pending = self.queue.count(status="pending")
+            return await update.message.reply_text(
+                f"📻 *Status Radio Stream AI*\n"
+                f"• Status: {status_text}\n"
+                f"• Sedang Diputar: *{_escape(st.current_title)}* — {_escape(st.current_artist)}\n"
+                f"• Antrian Pending: `{n_pending}` lagu\n"
+                f"• Output Mode: `{self.settings.stream_mode}`\n"
+                f"• Web Player: http://localhost:{self.settings.web_port}",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        dev = "\u2705 online" if (self.watchdog and self.watchdog.online) else "\u26a0\ufe0f offline"
         n = self.queue.count(update.effective_chat.id)
         await update.message.reply_text(
             f"Device *{self.settings.device_name or '?'}*: {dev}\n"
@@ -202,7 +386,43 @@ class Handlers:
             return await self._deny(update)
         query = " ".join(ctx.args).strip()
         if not query:
-            return await update.message.reply_text("Pakai: /search <judul lagu>")
+            return await update.message.reply_text("Pakai: `/search <judul lagu>`", parse_mode=ParseMode.MARKDOWN)
+
+        # Mode YouTube
+        if self.settings.music_source == "youtube":
+            if not self.downloader or not self.downloader.is_available():
+                return await update.message.reply_text("Downloader YouTube tidak tersedia.")
+
+            status_msg = await update.message.reply_text(f"🔎 Mencari lagu YouTube untuk: _{_escape(query)}_...", parse_mode=ParseMode.MARKDOWN)
+
+            tracks_meta = await _to_thread(self.downloader.search_multitracks, query, 5)
+            if not tracks_meta:
+                return await status_msg.edit_text(f"Tidak ada hasil untuk: *{_escape(query)}*", parse_mode=ParseMode.MARKDOWN)
+
+            # Simpan hasil untuk referensi manual /queue <nomor>
+            ctx.chat_data["last_search_yt"] = tracks_meta
+
+            lines = [f"🔍 *Hasil pencarian YouTube untuk:* _{_escape(query)}_\n"]
+            keyboard = []
+
+            for i, t in enumerate(tracks_meta, 1):
+                dur_text = f"{t.duration_sec // 60}:{t.duration_sec % 60:02d}" if t.duration_sec else "--:--"
+                lines.append(f"*{i}.* *{_escape(t.title)}* — `{dur_text}`")
+                # Tombol per lagu
+                short_title = t.title[:25] + "..." if len(t.title) > 28 else t.title
+                keyboard.append([
+                    InlineKeyboardButton(f"▶️ {i}. {short_title}", callback_data=f"qyt:{t.video_id}")
+                ])
+
+            lines.append("\n_Klik tombol di bawah untuk langsung memutar:_")
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            return await status_msg.edit_text(
+                "\n".join(lines),
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        # Mode Spotify (Legacy)
         try:
             tracks = await _to_thread(self.spotify.search_tracks, query)
         except SpotifyError as exc:
@@ -231,9 +451,78 @@ class Handlers:
             )
 
         user = update.effective_user
-        who = user.first_name or str(user.id)
+        who = (
+            f"@{user.username}"
+            if user and user.username
+            else (user.first_name if user else "Anonim")
+        )
 
-        # kalau argumen angka -> pakai hasil search terakhir
+        # Mode YouTube
+        if self.settings.music_source == "youtube":
+            from .downloader import DownloaderError
+            from .queue_store import QueueValidationError
+
+            title = arg
+            artist = "YouTube"
+            uri = f"query:{arg}"
+            source_url = ""
+            duration_ms = 0
+
+            # Jika memilih via nomor dari /search terakhir
+            if arg.isdigit():
+                yt_tracks = ctx.chat_data.get("last_search_yt") or []
+                idx = int(arg) - 1
+                if 0 <= idx < len(yt_tracks):
+                    meta = yt_tracks[idx]
+                    title = meta.title
+                    artist = meta.uploader
+                    uri = f"yt:{meta.video_id}"
+                    source_url = meta.webpage_url
+                    duration_ms = meta.duration_sec * 1000
+                else:
+                    return await update.message.reply_text("Nomor tidak ada di hasil /search terakhir.")
+            else:
+                try:
+                    self.queue.check_moderation_and_quota(
+                        requested_by=who,
+                        text_to_check=arg,
+                        banned_words=self.settings.banned_words,
+                        max_user_quota=self.settings.max_queue_per_user,
+                        max_total_quota=self.settings.max_queue_total,
+                        cooldown_sec=self.settings.request_cooldown_sec,
+                    )
+                except QueueValidationError as e:
+                    return await update.message.reply_text(f"⚠️ {e}")
+
+                if self.downloader and self.downloader.is_available():
+                    try:
+                        meta = self.downloader.resolve_query(arg)
+                        title = meta.title
+                        artist = meta.uploader
+                        uri = f"yt:{meta.video_id}"
+                        source_url = meta.webpage_url
+                        duration_ms = meta.duration_sec * 1000
+                    except DownloaderError as e:
+                        return await update.message.reply_text(f"⚠️ Gagal resolusi YouTube: {e}")
+
+            self.queue.add(
+                chat_id=update.effective_chat.id,
+                track_uri=uri,
+                title=title,
+                artist=artist,
+                duration_ms=duration_ms,
+                requested_by=who,
+                source_type="youtube",
+                source_url=source_url,
+            )
+            pos = self.queue.count(status="pending")
+            return await update.message.reply_text(
+                f"📻 Ditambahkan ke siaran radio: *{_escape(title)}* — {_escape(artist)}\n"
+                f"Posisi antrian: #{pos}",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        # Mode Spotify (Legacy)
         track = None
         if arg.isdigit():
             tracks = ctx.chat_data.get("last_search") or []
@@ -257,7 +546,57 @@ class Handlers:
         title = track["name"]
         uri = track["uri"]
 
-        # simpan ke queue lokal
+        # Simpan ke queue
+        if self.settings.music_source == "youtube":
+            from .downloader import DownloaderError
+            from .queue_store import QueueValidationError
+
+            text_check = query
+            try:
+                self.queue.check_moderation_and_quota(
+                    requested_by=who,
+                    text_to_check=text_check,
+                    banned_words=self.settings.banned_words,
+                    max_user_quota=self.settings.max_queue_per_user,
+                    max_total_quota=self.settings.max_queue_total,
+                    cooldown_sec=self.settings.request_cooldown_sec,
+                )
+            except QueueValidationError as e:
+                return await update.message.reply_text(f"⚠️ {e}")
+
+            title = query
+            artist = "YouTube"
+            uri = f"query:{query}"
+            source_url = ""
+
+            if self.downloader and self.downloader.is_available():
+                try:
+                    meta = self.downloader.resolve_query(query)
+                    title = meta.title
+                    artist = meta.uploader
+                    uri = f"yt:{meta.video_id}"
+                    source_url = meta.webpage_url
+                except DownloaderError as e:
+                    return await update.message.reply_text(f"⚠️ Gagal resolusi YouTube: {e}")
+
+            self.queue.add(
+                chat_id=update.effective_chat.id,
+                track_uri=uri,
+                title=title,
+                artist=artist,
+                duration_ms=0,
+                requested_by=who,
+                source_type="youtube",
+                source_url=source_url,
+            )
+            pos = self.queue.count(status="pending")
+            return await update.message.reply_text(
+                f"📻 Ditambahkan ke siaran radio: *{_escape(title)}* — {_escape(artist)}\n"
+                f"Posisi queue: {pos}",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        # simpan ke queue lokal (Spotify)
         self.queue.add(
             chat_id=update.effective_chat.id,
             track_uri=uri,
@@ -297,14 +636,25 @@ class Handlers:
     async def cmd_list(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
             return await self._deny(update)
-        items = self.queue.list(update.effective_chat.id)
+        items = self.queue.list(status="pending")
         if not items:
-            return await update.message.reply_text("Queue kosong.")
+            return await update.message.reply_text("Antrian lagu saat ini kosong.")
+
         lines = ["*Queue sekarang:*"]
+        keyboard = []
         for i, it in enumerate(items, 1):
             lines.append(_fmt_item(i, it))
-        lines.append("\nHapus dengan: `/remove <nomor>`")
-        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.MARKDOWN)
+            # Tambahkan tombol pintas untuk 5 antrian pertama
+            if i <= 5:
+                short_title = it.title[:20] + "..." if len(it.title) > 23 else it.title
+                keyboard.append([
+                    InlineKeyboardButton(f"⚡ Dahulukan #{i} ({short_title})", callback_data=f"act:bump:{it.id}"),
+                    InlineKeyboardButton(f"🗑️ Hapus #{i}", callback_data=f"act:del:{it.id}"),
+                ])
+
+        lines.append("\n_Gunakan tombol di bawah atau ketik `/bump <nomor>` / `/remove <nomor>`_")
+        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+        await update.message.reply_text("\n".join(lines), reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
     @_cmd
     async def cmd_remove(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -348,9 +698,215 @@ class Handlers:
         await update.message.reply_text("\n".join(reply), parse_mode=ParseMode.MARKDOWN)
 
     @_cmd
+    async def cmd_salam(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Kirim request dengan titip salam:
+        Format 1: /salam <judul> | untuk <target> | <pesan salam>
+        Format 2: /salam <judul> | <pesan salam>
+        """
+        if not self._allowed(update):
+            return await self._deny(update)
+
+        raw = " ".join(ctx.args).strip()
+        if not raw or "|" not in raw:
+            return await update.message.reply_text(
+                "Format salah. Gunakan:\n"
+                "`/salam <judul lagu> | untuk <target> | <pesan salam>`\n"
+                "Atau: `/salam <judul lagu> | <pesan salam>`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        parts = [p.strip() for p in raw.split("|") if p.strip()]
+        if len(parts) >= 3:
+            query = parts[0]
+            target_raw = parts[1]
+            shoutout = " | ".join(parts[2:])
+            # Bersihkan prefix "untuk" jika ada
+            shoutout_to = target_raw[5:].strip() if target_raw.lower().startswith("untuk ") else target_raw
+        elif len(parts) == 2:
+            query = parts[0]
+            shoutout_to = "semua pendengar"
+            shoutout = parts[1]
+        else:
+            return await update.message.reply_text("Format tidak valid.")
+
+        if not query:
+            return await update.message.reply_text("Judul lagu tidak boleh kosong.")
+
+        if len(shoutout) > self.settings.shoutout_max_chars:
+            return await update.message.reply_text(
+                f"Pesan salam terlalu panjang. Maksimal {self.settings.shoutout_max_chars} karakter."
+            )
+
+        who = (
+            f"@{update.effective_user.username}"
+            if update.effective_user and update.effective_user.username
+            else (update.effective_user.first_name if update.effective_user else "Anonim")
+        )
+
+        from .downloader import DownloaderError
+        from .queue_store import QueueValidationError
+
+        text_check = f"{query} {shoutout_to} {shoutout}"
+        try:
+            self.queue.check_moderation_and_quota(
+                requested_by=who,
+                text_to_check=text_check,
+                banned_words=self.settings.banned_words,
+                max_user_quota=self.settings.max_queue_per_user,
+                max_total_quota=self.settings.max_queue_total,
+                cooldown_sec=self.settings.request_cooldown_sec,
+            )
+        except QueueValidationError as e:
+            return await update.message.reply_text(f"⚠️ {e}")
+
+        title = query
+        artist = "YouTube"
+        uri = f"query:{query}"
+        source_url = ""
+        duration_ms = 0
+
+        if self.downloader and self.downloader.is_available():
+            try:
+                meta = self.downloader.resolve_query(query)
+                title = meta.title
+                artist = meta.uploader
+                uri = f"yt:{meta.video_id}"
+                source_url = meta.webpage_url
+                duration_ms = meta.duration_sec * 1000
+            except DownloaderError as e:
+                return await update.message.reply_text(f"⚠️ Gagal resolusi YouTube: {e}")
+
+        self.queue.add(
+            chat_id=update.effective_chat.id,
+            track_uri=uri,
+            title=title,
+            artist=artist,
+            duration_ms=duration_ms,
+            requested_by=who,
+            source_type="youtube",
+            source_url=source_url,
+            shoutout_to=shoutout_to,
+            shoutout_message=shoutout,
+        )
+        pos = self.queue.count(status="pending")
+        await update.message.reply_text(
+            f"📻 *Request & Salam diterima!*\n"
+            f"🎵 Lagu: *{_escape(title)}* — {_escape(artist)}\n"
+            f"🎯 Untuk: *{_escape(shoutout_to)}*\n"
+            f"💌 Salam: \"_{_escape(shoutout)}_\"\n"
+            f"🔢 Posisi antrian: #{pos}",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+    @_cmd
+    async def cmd_pesan(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Kirim pengumuman suara siaran mandiri (Khusus Admin):
+        Format: /pesan untuk <Target> | <Isi Pesan>
+        Atau: /pesan <Isi Pesan>
+        """
+        user = update.effective_user
+        if not user or user.id not in self.settings.allowed_telegram_ids:
+            return await update.message.reply_text(
+                "⛔ *Akses Ditolak:* Perintah siaran pengumuman mandiri (`/pesan`) hanya dapat digunakan oleh Admin.\n"
+                "Untuk pendengar, gunakan `/salam <Lagu> | <Pesan>`.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        raw = " ".join(ctx.args).strip()
+        if not raw:
+            return await update.message.reply_text(
+                "Gunakan format:\n"
+                "`/pesan untuk <Target> | <Isi Pesan>`\n"
+                "Atau: `/pesan <Isi Pesan>`",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        if "|" in raw:
+            parts = [p.strip() for p in raw.split("|", 1)]
+            target_raw = parts[0]
+            shoutout = parts[1]
+            shoutout_to = target_raw[5:].strip() if target_raw.lower().startswith("untuk ") else target_raw
+        else:
+            shoutout_to = "semua pendengar"
+            shoutout = raw
+
+        who = f"@{user.username}" if user.username else (user.first_name or "Admin")
+
+        item_id = self.queue.add(
+            chat_id=update.effective_chat.id if update.effective_chat else 0,
+            track_uri="msg:announcement",
+            title="📢 Pengumuman Radio",
+            artist=f"Admin {who}",
+            duration_ms=0,
+            requested_by=who,
+            source_type="message",
+            shoutout_to=shoutout_to,
+            shoutout_message=shoutout,
+        )
+
+        # Dahulukan ke posisi #1 di antrian
+        self.queue.bump_to_front(item_id)
+
+        # Interupsi instan: jika sedang ada lagu berputar, hentikan seketika agar pesan disiarkan detik ini juga
+        was_interrupted = False
+        if self.settings.music_source == "youtube" and self.audio_engine:
+            if self.audio_engine.state.is_running:
+                was_interrupted = True
+                self.audio_engine.stop()
+
+        status_notice = (
+            "⚡ *Interupsi Instan Aktif:* Lagu saat ini dijeda seketika. Penyiar AI langsung mengudara sekarang juga!"
+            if was_interrupted
+            else "Penyiar AI akan membacakannya sekarang di aliran siaran."
+        )
+
+        await update.message.reply_text(
+            f"📢 *Pengumuman Admin Disiarkan!*\n"
+            f"🎯 Untuk: *{_escape(shoutout_to)}*\n"
+            f"💌 Pesan: \"_{_escape(shoutout)}_\"\n\n"
+            f"{status_notice}",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+
+    @_cmd
     async def cmd_now(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not self._allowed(update):
             return await self._deny(update)
+
+        if self.settings.music_source == "youtube" and self.audio_engine:
+            st = self.audio_engine.state
+            status_text = "🟢 Sedang Mengudara" if st.is_running else "⚪ Menunggu Siaran"
+            host_text = "\n🎙️ *Host AI:* Sedang bicara" if st.is_host_speaking else ""
+            shout_text = f"\n💌 *Salam:* \"_{_escape(st.current_shoutout)}_\"" if st.current_shoutout else ""
+
+            duration_text = ""
+            if st.is_running and st.duration_sec > 0:
+                el_min, el_sec = divmod(st.elapsed_sec, 60)
+                rem_min, rem_sec = divmod(st.remaining_sec, 60)
+                tot_min, tot_sec = divmod(st.duration_sec, 60)
+                duration_text = (
+                    f"\n⏱️ *Durasi:* `{el_min:02d}:{el_sec:02d}` / `{tot_min:02d}:{tot_sec:02d}` "
+                    f"(sisa: `-{rem_min:02d}:{rem_sec:02d}`)"
+                )
+
+            # Tombol kontrol cepat
+            keyboard = [
+                [
+                    InlineKeyboardButton("⏭ Skip", callback_data="act:skip"),
+                    InlineKeyboardButton("📜 Antrian", callback_data="act:list"),
+                    InlineKeyboardButton("🔄 Refresh", callback_data="act:refresh"),
+                ]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            return await update.message.reply_text(
+                f"*Status Radio:* {status_text}\n"
+                f"*Lagu:* {_escape(st.current_title)} — {_escape(st.current_artist)}"
+                f"{duration_text}{host_text}{shout_text}",
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
         try:
             playing = await _to_thread(self.spotify.get_currently_playing)
         except SpotifyError as exc:
@@ -368,7 +924,49 @@ class Handlers:
 
     @_cmd
     async def cmd_next(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        if not self._allowed(update):
+            return await self._deny(update)
+
+        if self.settings.music_source == "youtube" and self.audio_engine:
+            if not self.audio_engine.state.is_running:
+                return await update.message.reply_text("Tidak ada lagu yang sedang diputar.")
+            cur_title = self.audio_engine.state.current_title
+            self.audio_engine.stop()
+            return await update.message.reply_text(
+                f"⏭ *Lagu di-skip:* {_escape(cur_title)}\nMemutar lagu berikutnya di antrian...",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
         return await self._control(update, "next")
+
+    @_cmd
+    async def cmd_bump(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Dahulukan lagu dari antrian ke paling depan: /bump <nomor>"""
+        if not self._allowed(update):
+            return await self._deny(update)
+
+        arg = " ".join(ctx.args).strip()
+        if not arg or not arg.isdigit():
+            return await update.message.reply_text("Pakai: `/bump <nomor>` (lihat nomor urut di `/list`)", parse_mode=ParseMode.MARKDOWN)
+
+        pos = int(arg)
+        items = self.queue.list(status="pending")
+        if not items:
+            return await update.message.reply_text("Antrian lagu sedang kosong.")
+
+        if pos < 1 or pos > len(items):
+            return await update.message.reply_text(f"Nomor tidak valid (1-{len(items)}).")
+
+        target_item = items[pos - 1]
+        ok = self.queue.bump_to_front(target_item.id)
+        if ok:
+            await update.message.reply_text(
+                f"⚡ *Lagu didahulukan ke urutan #1:* *{_escape(target_item.title)}* — {_escape(target_item.artist)}\n"
+                f"Lagu ini akan diputar langsung setelah lagu sekarang selesai/di-skip.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        else:
+            await update.message.reply_text("Gagal memindahkan posisi lagu.")
 
     @_cmd
     async def cmd_pause(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

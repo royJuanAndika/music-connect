@@ -6,7 +6,10 @@ import logging
 import time
 from pathlib import Path
 
-import httpx
+try:
+    import httpx
+except ImportError:
+    httpx = None  # type: ignore
 
 from .config import Settings
 

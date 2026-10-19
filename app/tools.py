@@ -52,7 +52,61 @@ def run_search(ctx: ToolContext, query: str, limit: int = 5) -> dict:
 
 
 # ---------------- runner: queue ----------------
-def run_queue(ctx: ToolContext, query: str) -> dict:
+def run_queue(ctx: ToolContext, query: str, shoutout: str = "") -> dict:
+    # Mode YouTube (default radio stream)
+    if ctx.settings.music_source == "youtube":
+        from .downloader import DownloaderError, YouTubeDownloader
+        from .queue_store import QueueValidationError
+
+        # Moderasi & kuota
+        text_check = f"{query} {shoutout}"
+        try:
+            ctx.queue.check_moderation_and_quota(
+                requested_by=ctx.requested_by,
+                text_to_check=text_check,
+                banned_words=ctx.settings.banned_words,
+                max_user_quota=ctx.settings.max_queue_per_user,
+                max_total_quota=ctx.settings.max_queue_total,
+                cooldown_sec=ctx.settings.request_cooldown_sec,
+            )
+        except QueueValidationError as exc:
+            return {"error": str(exc)}
+
+        dl = YouTubeDownloader(ctx.settings)
+        title = query
+        artist = "YouTube"
+        uri = f"query:{query}"
+        source_url = ""
+
+        if dl.is_available():
+            try:
+                meta = dl.resolve_query(query)
+                title = meta.title
+                artist = meta.uploader
+                uri = f"yt:{meta.video_id}"
+                source_url = meta.webpage_url
+            except DownloaderError as exc:
+                return {"error": str(exc)}
+
+        item_id = ctx.queue.add(
+            chat_id=ctx.chat_id,
+            track_uri=uri,
+            title=title,
+            artist=artist,
+            duration_ms=0,
+            requested_by=ctx.requested_by,
+            source_type="youtube",
+            source_url=source_url,
+            shoutout_message=shoutout,
+        )
+        return {
+            "queued": {"name": title, "artists": artist, "uri": uri},
+            "radio_mode": True,
+            "shoutout": shoutout,
+            "queue_position": ctx.queue.count(ctx.chat_id),
+        }
+
+    # Fallback Spotify (mode lama)
     try:
         tracks = ctx.spotify.search_tracks(query, limit=1)
     except SpotifyError as exc:
@@ -383,13 +437,14 @@ TOOLS: list[Tool] = [
     Tool(
         name="queue_track",
         description=(
-            "Tambahkan satu lagu ke queue Spotify + queue lokal. "
-            "Otomatis mencari lagu yang paling cocok dari query."
+            "Tambahkan lagu ke queue siaran radio. Mendukung judul lagu bebas, URL YouTube, "
+            "dan opsi titip salam (shoutout)."
         ),
         parameters={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Judul/artis lagu yang mau di-queue."}
+                "query": {"type": "string", "description": "Judul/artis lagu atau link YouTube."},
+                "shoutout": {"type": "string", "description": "Pesan titip salam opsional untuk Host AI."},
             },
             "required": ["query"],
         },
