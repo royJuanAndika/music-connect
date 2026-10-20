@@ -32,7 +32,7 @@ def test_auto_queue_cached_track():
         tracks_dir = tracks
         allowed_group_ids = (-100123,)
 
-    assert m._auto_queue_cached_track(qs, S()) is True
+    assert m._auto_queue_cached_track(qs, S()) != ""
     items = qs.list(status="pending")
     assert len(items) == 1, items
     it = items[0]
@@ -43,6 +43,11 @@ def test_auto_queue_cached_track():
     if it.track_uri == "yt:vid123":
         assert it.title == "Lagu Satu"
     print("OK auto_queue_cached_track:", it.track_uri, "|", it.title)
+
+    # lagu yang sama tidak boleh dipilih dua kali berturut-turut
+    picked = m._auto_queue_cached_track(qs, S(), exclude=it.local_path)
+    assert picked != it.local_path, picked
+    print("OK auto_queue tidak mengulang lagu terakhir:", picked)
 
 
 if __name__ == "__main__":

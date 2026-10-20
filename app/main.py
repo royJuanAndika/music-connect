@@ -119,11 +119,16 @@ async def _post_shutdown(app: Application) -> None:
     log.info("Bot berhenti.")
 
 
-def _auto_queue_cached_track(queue_store: QueueStore, settings) -> bool:
-    """Isi antrian dengan lagu dari cache lokal agar radio tidak diam saat antrian kosong."""
-    tracks = [p for p in settings.tracks_dir.glob("*.opus") if p.is_file()]
+def _auto_queue_cached_track(queue_store: QueueStore, settings, exclude: str = "") -> str:
+    """Isi antrian dengan lagu dari cache lokal agar radio tidak diam saat antrian kosong.
+
+    Return: path lagu yang dipilih ("" kalau tidak ada cache).
+    """
+    tracks = [p for p in settings.tracks_dir.glob("*.opus") if p.is_file() and str(p) != exclude]
     if not tracks:
-        return False
+        tracks = [p for p in settings.tracks_dir.glob("*.opus") if p.is_file()]
+    if not tracks:
+        return ""
     path = random.choice(tracks)
     title, artist, duration_ms = queue_store.latest_meta(path.stem)
     queue_store.add(
@@ -138,7 +143,7 @@ def _auto_queue_cached_track(queue_store: QueueStore, settings) -> bool:
         local_path=str(path),
     )
     log.info(f"Antrean kosong -> memutar lagu dari cache: {path.name}")
-    return True
+    return str(path)
 
 
 async def _broadcast_loop(
@@ -152,6 +157,7 @@ async def _broadcast_loop(
     """Loop penyiaran background berkelanjutan."""
     log.info("Memulai background loop siaran radio...")
     song_counter = 0
+    last_auto_path = ""
 
     while True:
         try:
@@ -160,8 +166,15 @@ async def _broadcast_loop(
                 # Antrian kosong: isi otomatis dari cache, kalau tidak ada pakai standby
                 # supaya stream RTMP tetap hidup (bukan diam).
                 if settings.stream_mode in ("rtmp", "both") and settings.rtmp_url and audio_engine.is_available():
-                    if not (settings.auto_play and _auto_queue_cached_track(queue_store, settings)):
+                    picked = (
+                        _auto_queue_cached_track(queue_store, settings, last_auto_path)
+                        if settings.auto_play
+                        else ""
+                    )
+                    if not picked:
                         await asyncio.to_thread(audio_engine.play_standby_sync, 15)
+                    else:
+                        last_auto_path = picked
                 else:
                     await asyncio.sleep(2)
                 continue
