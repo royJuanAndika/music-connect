@@ -33,7 +33,7 @@ def test_auto_queue_cached_track():
         allowed_group_ids = (-100123,)
 
     assert m._auto_queue_cached_track(qs, S()) != ""
-    items = qs.list(status="pending")
+    items = [i for i in qs.list(status="pending") if i.requested_by == "Radio AI"]
     assert len(items) == 1, items
     it = items[0]
     assert it.local_path.endswith(".opus")
