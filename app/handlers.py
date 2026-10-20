@@ -273,18 +273,14 @@ class Handlers:
     # ---- guard ----
     def _allowed(self, update: Update) -> bool:
         """Aturan akses:
-        - Di GRUP : bebas, siapa pun anggota grup boleh (biar temen tinggal masuk grup).
-        - Di DM   : cuma ALLOWED_TELEGRAM_IDS (kamu).
-        - Kalau chat-nya grup tapi ada GROUP_ID_ALLOWLIST, cek grupnya termasuk atau tidak.
+        - Di GRUP / SUPERGROUP : Bebas untuk semua grup (siapa pun anggota boleh).
+        - Di DM / Private      : Khusus admin jika ALLOWED_TELEGRAM_IDS diisi.
         """
         chat = update.effective_chat
         if chat is None:
             return False
         if chat.type in ("group", "supergroup"):
-            allowed_groups = self.settings.allowed_group_ids
-            if allowed_groups and chat.id not in allowed_groups:
-                log.info("DENY grup %s (tidak di ALLOWED_GROUP_IDS)", chat.id)
-                return False
+            # ponytail: allow all groups without restriction
             return True
 
         # DM / private: pakai allowlist user
@@ -292,7 +288,7 @@ class Handlers:
         if user is None:
             return False
         if not self.settings.allowed_telegram_ids:
-            return True  # allowlist kosong -> izinkan semua (hati-hati)
+            return True
         return user.id in self.settings.allowed_telegram_ids
 
     async def _deny(self, update: Update) -> None:
