@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
@@ -118,6 +119,28 @@ async def _post_shutdown(app: Application) -> None:
     log.info("Bot berhenti.")
 
 
+def _auto_queue_cached_track(queue_store: QueueStore, settings) -> bool:
+    """Isi antrian dengan lagu dari cache lokal agar radio tidak diam saat antrian kosong."""
+    tracks = [p for p in settings.tracks_dir.glob("*.opus") if p.is_file()]
+    if not tracks:
+        return False
+    path = random.choice(tracks)
+    title, artist, duration_ms = queue_store.latest_meta(path.stem)
+    queue_store.add(
+        chat_id=settings.allowed_group_ids[0] if settings.allowed_group_ids else 0,
+        track_uri=f"yt:{path.stem}",
+        title=title or path.stem,
+        artist=artist or "Radio AI",
+        duration_ms=duration_ms,
+        requested_by="Radio AI",
+        source_type="youtube",
+        source_url=f"https://www.youtube.com/watch?v={path.stem}",
+        local_path=str(path),
+    )
+    log.info(f"Antrean kosong -> memutar lagu dari cache: {path.name}")
+    return True
+
+
 async def _broadcast_loop(
     settings,
     audio_engine: AudioEngine,
@@ -134,9 +157,11 @@ async def _broadcast_loop(
         try:
             item = queue_store.pop_next()
             if not item:
-                # Antrian kosong: jika streaming RTMP aktif, putar standby loop agar stream tetap hidup
+                # Antrian kosong: isi otomatis dari cache, kalau tidak ada pakai standby
+                # supaya stream RTMP tetap hidup (bukan diam).
                 if settings.stream_mode in ("rtmp", "both") and settings.rtmp_url and audio_engine.is_available():
-                    await asyncio.to_thread(audio_engine.play_standby_sync, 15)
+                    if not (settings.auto_play and _auto_queue_cached_track(queue_store, settings)):
+                        await asyncio.to_thread(audio_engine.play_standby_sync, 15)
                 else:
                     await asyncio.sleep(2)
                 continue

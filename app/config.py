@@ -63,6 +63,7 @@ class Settings:
     yt_proxy: str = ""
     cache_max_gb: float = 10.0
     prefetch_count: int = 2
+    auto_play: bool = True
 
     # Broadcast Engine & Stream Output
     stream_mode: str = "hls"
@@ -221,6 +222,7 @@ def load_settings() -> Settings:
         yt_proxy=os.getenv("YT_PROXY", "").strip(),
         cache_max_gb=float(os.getenv("CACHE_MAX_GB", "10.0")),
         prefetch_count=int(os.getenv("PREFETCH_COUNT", "2")),
+        auto_play=_to_bool(os.getenv("AUTO_PLAY", "true"), default=True),
 
         # Broadcast Engine & Stream Output
         stream_mode=os.getenv("STREAM_MODE", "hls").strip().lower(),

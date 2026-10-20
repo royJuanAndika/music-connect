@@ -233,6 +233,18 @@ class QueueStore:
             self._conn.commit()
             return cur.rowcount > 0
 
+    def latest_meta(self, video_id: str) -> tuple[str, str, int]:
+        """Ambil judul/artis/durasi terakhir dari riwayat untuk video_id (cache lookup)."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT title, artist, duration_ms FROM queue WHERE track_uri=? "
+                "ORDER BY id DESC LIMIT 1",
+                (f"yt:{video_id}",),
+            ).fetchone()
+        if row is None:
+            return ("", "", 0)
+        return (row["title"], row["artist"], int(row["duration_ms"] or 0))
+
     def pop_next(self, chat_id: Optional[int] = None) -> QueueItem | None:
         """Ambil lagu pending teratas dan tandai sebagai playing."""
         query = "SELECT * FROM queue WHERE status='pending'"
