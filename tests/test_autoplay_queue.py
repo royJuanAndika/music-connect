@@ -10,7 +10,7 @@ from app.queue_store import QueueStore
 def test_latest_meta():
     tmp = tempfile.mkdtemp()
     qs = QueueStore(Path(tmp) / "q.db")
-    qs.add(chat_id=1, track_uri="yt:abc", title="Judul", artist="Artis", duration_ms=1234)
+    qs.add(chat_id=1, track_uri="yt:abc", title="Judul", artist="Artis", duration_ms=1234, requested_by="test")
     assert qs.latest_meta("abc") == ("Judul", "Artis", 1234)
     assert qs.latest_meta("tidak-ada") == ("", "", 0)
     print("OK latest_meta")
@@ -26,7 +26,7 @@ def test_auto_queue_cached_track():
     (tracks / "vid456.opus").write_bytes(b"x")
 
     qs = QueueStore(tmp / "q.db")
-    qs.add(chat_id=1, track_uri="yt:vid123", title="Lagu Satu", artist="Artis", duration_ms=5000)
+    qs.add(chat_id=1, track_uri="yt:vid123", title="Lagu Satu", artist="Artis", duration_ms=5000, requested_by="test")
 
     class S:
         tracks_dir = tracks
