@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
@@ -39,6 +40,7 @@ BOT_COMMANDS = [
     BotCommand("request", "Request lagu (judul atau URL YouTube)"),
     BotCommand("salam", "Request + titip salam (judul | salam)"),
     BotCommand("pesan", "Siarkan pesan pengumuman suara (Khusus Admin)"),
+    BotCommand("rtmpkey", "Ganti stream key RTMP Telegram (Khusus Admin)"),
     BotCommand("skip", "Lewati lagu yang sedang diputar"),
     BotCommand("bump", "Dahulukan lagu ke urutan depan (nomor)"),
     BotCommand("now", "Lagu & sisa durasi siaran saat ini"),
@@ -161,6 +163,13 @@ async def _broadcast_loop(
 
     while True:
         try:
+            # Stream key RTMP bisa diganti runtime lewat /rtmpkey (Telegram sering expire key)
+            stored_key = queue_store.get_setting("rtmp_key")
+            if stored_key and stored_key != settings.rtmp_key:
+                settings = replace(settings, rtmp_key=stored_key)
+                audio_engine.settings = settings
+                log.info("Stream key RTMP dimuat dari penyimpanan (perlu sesi Live Stream aktif di Telegram).")
+
             item = queue_store.pop_next()
             if not item:
                 # Antrian kosong: isi otomatis dari cache, kalau tidak ada pakai standby
@@ -346,6 +355,7 @@ def main() -> None:
     app.add_handler(CommandHandler(["request", "queue", "q"], h.cmd_queue))
     app.add_handler(CommandHandler("salam", h.cmd_salam))
     app.add_handler(CommandHandler("pesan", h.cmd_pesan))
+    app.add_handler(CommandHandler("rtmpkey", h.cmd_rtmpkey))
     app.add_handler(CommandHandler(["next", "skip"], h.cmd_next))
     app.add_handler(CommandHandler(["bump", "top"], h.cmd_bump))
     app.add_handler(CommandHandler("list", h.cmd_list))

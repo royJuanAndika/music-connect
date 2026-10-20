@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS queue (
 );
 CREATE INDEX IF NOT EXISTS idx_queue_chat ON queue(chat_id, id);
 CREATE INDEX IF NOT EXISTS idx_queue_status ON queue(status, id);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -232,6 +237,23 @@ class QueueStore:
             )
             self._conn.commit()
             return cur.rowcount > 0
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Simpan konfigurasi runtime (mis. stream key RTMP) tanpa restart container."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+            self._conn.commit()
+
+    def get_setting(self, key: str, default: str = "") -> str:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM app_settings WHERE key=?", (key,)
+            ).fetchone()
+        return row["value"] if row else default
 
     def latest_meta(self, video_id: str) -> tuple[str, str, int]:
         """Ambil judul/artis/durasi terakhir dari riwayat untuk video_id (cache lookup)."""

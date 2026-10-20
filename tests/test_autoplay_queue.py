@@ -50,7 +50,19 @@ def test_auto_queue_cached_track():
     print("OK auto_queue tidak mengulang lagu terakhir:", picked)
 
 
+def test_rtmp_key_setting():
+    tmp = tempfile.mkdtemp()
+    qs = QueueStore(Path(tmp) / "q.db")
+    assert qs.get_setting("rtmp_key") == ""
+    qs.set_setting("rtmp_key", "3946103740:secret")
+    assert qs.get_setting("rtmp_key") == "3946103740:secret"
+    qs.set_setting("rtmp_key", "3946103740:secret2")
+    assert qs.get_setting("rtmp_key") == "3946103740:secret2"
+    print("OK app_settings rtmp_key")
+
+
 if __name__ == "__main__":
     test_latest_meta()
     test_auto_queue_cached_track()
+    test_rtmp_key_setting()
     print("ALL QUEUE AUTOPLAY TESTS PASSED!")

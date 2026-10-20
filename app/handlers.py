@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import functools
 import logging
+from dataclasses import replace
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -988,6 +989,35 @@ class Handlers:
         except SpotifyError as exc:
             return await update.message.reply_text(f"Gagal {action}: {exc}")
         await update.message.reply_text(f"OK: {action}.")
+
+    @_cmd
+    async def cmd_rtmpkey(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Ganti stream key RTMP Telegram tanpa restart (Admin).
+
+        Format: /rtmpkey 3946103740:u8hmaL4jnIoiGcgzePiwaQ
+        """
+        user = update.effective_user
+        if not user or user.id not in self.settings.allowed_telegram_ids:
+            return await update.message.reply_text(
+                "⛔ *Akses Ditolak:* hanya Admin yang bisa mengganti stream key.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        key = " ".join(ctx.args).strip()
+        if not key:
+            return await update.message.reply_text(
+                "Gunakan: `/rtmpkey <chat_id>:<secret>`\n"
+                "Salin *Stream Key* dari dialog Live Stream Telegram (Live Stream -> Stream with...).",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        self.queue.set_setting("rtmp_key", key)
+        if self.audio_engine:
+            self.audio_engine.settings = replace(self.audio_engine.settings, rtmp_key=key)
+        await update.message.reply_text(
+            f"✅ Stream key diperbarui, berlaku untuk segmen berikutnya.\nKey: `{_escape(key)}`",
+            parse_mode=ParseMode.MARKDOWN,
+        )
 
     @_cmd
     async def cmd_clearqueue(
