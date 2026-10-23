@@ -74,11 +74,12 @@ class AudioEngine:
         # Limiter anti-clipping di ujung mix jika diaktifkan
         limiter = ",alimiter=limit=0.95:attack=5:release=50:asc=1" if getattr(self.settings, "audio_limiter_enabled", True) else ""
 
+        # [1:a] input stream dipad untuk sidechain, [v_clean] hasil filter dimix ke output
         base = (
-            f"{voice_prep};"
-            f"[v_clean]apad[pad_voice];"
+            f"[1:a]apad[pad_voice];"
             f"[0:a][pad_voice]sidechaincompress="
             f"threshold={level}:ratio={ratio}:attack={attack}:release={release}[ducked];"
+            f"{voice_prep};"
             f"[ducked][v_clean]amix=inputs=2:duration=first:dropout_transition=0{limiter}"
         )
 
@@ -129,8 +130,8 @@ class AudioEngine:
 
         # Amix duration=first pada v_clean agar panjang siaran mengikuti durasi suara pesan
         base_bed = (
+            f"[0:a][1:a]sidechaincompress=threshold={level}:ratio={ratio}:attack={attack}:release={release}[ducked];"
             f"{voice_prep};"
-            f"[0:a][v_clean]sidechaincompress=threshold={level}:ratio={ratio}:attack={attack}:release={release}[ducked];"
             f"[v_clean][ducked]amix=inputs=2:duration=first:dropout_transition=0{limiter}"
         )
 
