@@ -283,9 +283,14 @@ def main() -> None:
         spotify.load_token()
         watchdog = DeviceWatchdog(settings, spotify)
 
-    # Setup handlers
+    # Setup handlers & Alert Manager
+    from .alert_manager import AlertManager
+    alert_mgr = AlertManager(settings, audio_engine, llm, tts)
+    alert_mgr.start()
+
     h = Handlers(settings, spotify, queue, watchdog, llm=llm, memory=memory)
     h.set_radio_components(audio_engine, downloader)
+    h.alert_manager = alert_mgr
 
     if not settings.telegram_enabled or not settings.telegram_bot_token:
         log.info("Telegram bot dinonaktifkan / token kosong. Menjalankan broadcast & web player saja...")

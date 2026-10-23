@@ -97,6 +97,9 @@ class Settings:
     duck_attack_ms: int = 30
     duck_release_ms: int = 1200
     duck_ratio: float = 5.0
+    alert_duck_level: float = 0.25
+    alert_attack_ms: int = 15
+    alert_release_ms: int = 400
     audio_limiter_enabled: bool = True
 
     # Interaksi & Moderasi
@@ -261,6 +264,9 @@ def load_settings() -> Settings:
         duck_attack_ms=int(os.getenv("DUCK_ATTACK_MS", "30")),
         duck_release_ms=int(os.getenv("DUCK_RELEASE_MS", "1200")),
         duck_ratio=float(os.getenv("DUCK_RATIO", "5.0")),
+        alert_duck_level=float(os.getenv("ALERT_DUCK_LEVEL", "0.25")),
+        alert_attack_ms=int(os.getenv("ALERT_ATTACK_MS", "15")),
+        alert_release_ms=int(os.getenv("ALERT_RELEASE_MS", "400")),
         audio_limiter_enabled=_to_bool(os.getenv("AUDIO_LIMITER_ENABLED", "true"), default=True),
 
         # Interaksi & Moderasi

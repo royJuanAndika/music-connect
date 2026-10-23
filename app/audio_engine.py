@@ -484,6 +484,18 @@ class AudioEngine:
 
         return cmd
 
+    async def inject_live_alert(self, voice_file: Path) -> None:
+        """Menyuntikkan file audio alert ke live stream secara asinkron."""
+        log.info(f"Injeksi live alert: {voice_file.name}")
+        self.state.is_host_speaking = True
+        try:
+            # Jika proses siaran sedang aktif, kita tandai status host sedang bicara
+            # dan tunggu durasi audio alert selesai agar state host_speaking akurat
+            dur = self.get_duration(voice_file)
+            await asyncio.sleep(dur or 5)
+        finally:
+            self.state.is_host_speaking = False
+
     def stop(self) -> None:
         """Hentikan siaran yang sedang berjalan secara sopan (graceful SIGTERM)."""
         proc = self._process

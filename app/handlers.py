@@ -75,6 +75,56 @@ def _escape(text: str) -> str:
     return text
 
 
+def _render_queue_message(items: list, page: int = 1, page_size: int = 5) -> tuple[str, InlineKeyboardMarkup]:
+    """Helper untuk merender tampilan antrean lagu dan inline keyboard interaktif dengan pagination."""
+    total_items = len(items)
+    total_pages = max(1, (total_items + page_size - 1) // page_size)
+    page = max(1, min(page, total_pages))
+
+    start_idx = (page - 1) * page_size
+    current_items = items[start_idx : start_idx + page_size]
+
+    if not items:
+        lines = ["*📻 Antrian Radio Kosong*\n_Gunakan /q <judul> untuk menambah lagu._"]
+        keyboard = [
+            [
+                InlineKeyboardButton("🔄 Refresh", callback_data="act:list:1"),
+                InlineKeyboardButton("📻 Status Siaran", callback_data="act:refresh"),
+            ]
+        ]
+        return "\n".join(lines), InlineKeyboardMarkup(keyboard)
+
+    lines = [f"*📜 Daftar Antrian Radio (Hal {page}/{total_pages} - Total {total_items} lagu):*\n"]
+    for i, it in enumerate(current_items, start_idx + 1):
+        lines.append(_fmt_item(i, it))
+
+    lines.append("\n_Pilih aksi cepat di bawah:_")
+
+    keyboard = []
+    # Baris tombol aksi untuk item halaman aktif
+    for i, it in enumerate(current_items, start_idx + 1):
+        short_title = it.title[:18] + ".." if len(it.title) > 20 else it.title
+        keyboard.append([
+            InlineKeyboardButton(f"⚡ #{i} {short_title}", callback_data=f"act:bump:{it.id}:{page}"),
+            InlineKeyboardButton(f"🗑️ #{i}", callback_data=f"act:del:{it.id}:{page}"),
+        ])
+
+    # Baris tombol navigasi pagination & refresh
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"act:page:{page - 1}"))
+    nav_row.append(InlineKeyboardButton("🔄 Refresh", callback_data=f"act:page:{page}"))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"act:page:{page + 1}"))
+
+    keyboard.append(nav_row)
+    keyboard.append([
+        InlineKeyboardButton("📻 Status Siaran", callback_data="act:refresh"),
+        InlineKeyboardButton("⏭ Skip Lagu", callback_data="act:skip"),
+    ])
+
+    return "\n".join(lines), InlineKeyboardMarkup(keyboard)
+
 class Handlers:
     def __init__(
         self,
@@ -93,6 +143,7 @@ class Handlers:
         self.memory = memory  # MemoryStore | None
         self.audio_engine = None  # AudioEngine | None
         self.downloader = None  # YouTubeDownloader | None
+        self.alert_manager = None  # AlertManager | None
         self._last_pesan_time: dict[int, float] = {}  # user_id -> timestamp
 
     def set_radio_components(self, audio_engine, downloader) -> None:
@@ -111,7 +162,6 @@ class Handlers:
 
         # 1. Action: Refresh now-playing
         if data == "act:refresh":
-            await query.answer("Memperbarui status...")
             if self.settings.music_source == "youtube" and self.audio_engine:
                 st = self.audio_engine.state
                 status_text = "🟢 Sedang Mengudara" if st.is_running else "⚪ Menunggu Siaran"
@@ -129,7 +179,7 @@ class Handlers:
                 keyboard = [
                     [
                         InlineKeyboardButton("⏭ Skip", callback_data="act:skip"),
-                        InlineKeyboardButton("📜 Antrian", callback_data="act:list"),
+                        InlineKeyboardButton("📜 Antrian", callback_data="act:list:1"),
                         InlineKeyboardButton("🔄 Refresh", callback_data="act:refresh"),
                     ]
                 ]
@@ -140,8 +190,15 @@ class Handlers:
                 )
                 try:
                     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-                except Exception:
-                    pass
+                    await query.answer("Status radio diperbarui.")
+                except Exception as e:
+                    # Message is not modified is normal if clicked within same second
+                    if "not modified" in str(e).lower():
+                        await query.answer("Status sudah paling terbaru.")
+                    else:
+                        await query.answer(f"Refresh: {e}", show_alert=False)
+            else:
+                await query.answer("Engine radio tidak aktif.", show_alert=True)
             return
 
         # 2. Action: Skip track
@@ -151,7 +208,7 @@ class Handlers:
                     return await query.answer("Tidak ada lagu yang sedang diputar.", show_alert=True)
                 cur_title = self.audio_engine.state.current_title
                 self.audio_engine.stop()
-                await query.answer("Lagu di-skip!")
+                await query.answer("⏭ Lagu berhasil di-skip!")
                 if query.message:
                     await query.message.reply_text(
                         f"⏭ *Lagu di-skip oleh {who}:* {_escape(cur_title)}\nMemutar lagu berikutnya...",
@@ -159,53 +216,62 @@ class Handlers:
                     )
             return
 
-        # 3. Action: Lihat antrian
-        if data == "act:list":
-            await query.answer()
+        # 3. Action: Lihat antrian / Pagination
+        if data == "act:list" or data.startswith("act:list:") or data.startswith("act:page:"):
+            page = 1
+            if ":" in data:
+                try:
+                    page = int(data.split(":")[-1])
+                except ValueError:
+                    page = 1
             items = self.queue.list(status="pending")
-            if not items:
-                if query.message:
-                    await query.message.reply_text("Antrian lagu saat ini kosong.")
-                return
-            lines = ["*Queue sekarang:*"]
-            keyboard = []
-            for i, it in enumerate(items, 1):
-                lines.append(_fmt_item(i, it))
-                if i <= 5:
-                    short_title = it.title[:20] + "..." if len(it.title) > 23 else it.title
-                    keyboard.append([
-                        InlineKeyboardButton(f"⚡ #{i} ({short_title})", callback_data=f"act:bump:{it.id}"),
-                        InlineKeyboardButton(f"🗑️ #{i}", callback_data=f"act:del:{it.id}"),
-                    ])
-            lines.append("\n_Pilih tombol untuk mendahulukan (⚡) atau menghapus (🗑️):_")
-            if query.message:
-                await query.message.reply_text(
-                    "\n".join(lines),
-                    reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None,
-                    parse_mode=ParseMode.MARKDOWN,
-                )
+            text, reply_markup = _render_queue_message(items, page=page)
+            try:
+                await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+                await query.answer(f"Antrian halaman {page}")
+            except Exception as e:
+                if "not modified" in str(e).lower():
+                    await query.answer("Antrian sudah paling terbaru.")
+                elif query.message:
+                    # Jika tombol ditekan dari pesan now-playing, tampilkan antrian sebagai pesan baru
+                    await query.message.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+                    await query.answer()
             return
 
         # 3b. Action: Bump track dari tombol
         if data.startswith("act:bump:"):
-            item_id = int(data[len("act:bump:"):])
+            parts = data.split(":")
+            item_id = int(parts[2])
+            page = int(parts[3]) if len(parts) > 3 else 1
             ok = self.queue.bump_to_front(item_id)
             if ok:
-                await query.answer("Lagu didahulukan ke urutan #1!")
-                if query.message:
-                    await query.message.reply_text(f"⚡ Lagu #{item_id} berhasil didahulukan oleh {who}!")
+                await query.answer(f"⚡ Lagu #{item_id} didahulukan ke urutan #1!")
+                # In-place refresh tampilan antrian
+                items = self.queue.list(status="pending")
+                text, reply_markup = _render_queue_message(items, page=page)
+                try:
+                    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+                except Exception:
+                    pass
             else:
-                await query.answer("Gagal memindahkan lagu.", show_alert=True)
+                await query.answer("Gagal memindahkan lagu (mungkin sudah diputar).", show_alert=True)
             return
 
         # 3c. Action: Delete track dari tombol
         if data.startswith("act:del:"):
-            item_id = int(data[len("act:del:"):])
+            parts = data.split(":")
+            item_id = int(parts[2])
+            page = int(parts[3]) if len(parts) > 3 else 1
             ok = self.queue.remove(item_id)
             if ok:
-                await query.answer("Lagu dihapus dari antrian!")
-                if query.message:
-                    await query.message.reply_text(f"🗑️ Lagu #{item_id} dihapus dari antrian oleh {who}.")
+                await query.answer(f"🗑️ Lagu #{item_id} dihapus dari antrian.")
+                # In-place refresh tampilan antrian
+                items = self.queue.list(status="pending")
+                text, reply_markup = _render_queue_message(items, page=page)
+                try:
+                    await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+                except Exception:
+                    pass
             else:
                 await query.answer("Lagu tidak ditemukan / sudah terhapus.", show_alert=True)
             return
@@ -639,24 +705,8 @@ class Handlers:
         if not self._allowed(update):
             return await self._deny(update)
         items = self.queue.list(status="pending")
-        if not items:
-            return await update.message.reply_text("Antrian lagu saat ini kosong.")
-
-        lines = ["*Queue sekarang:*"]
-        keyboard = []
-        for i, it in enumerate(items, 1):
-            lines.append(_fmt_item(i, it))
-            # Tambahkan tombol pintas untuk 5 antrian pertama
-            if i <= 5:
-                short_title = it.title[:20] + "..." if len(it.title) > 23 else it.title
-                keyboard.append([
-                    InlineKeyboardButton(f"⚡ Dahulukan #{i} ({short_title})", callback_data=f"act:bump:{it.id}"),
-                    InlineKeyboardButton(f"🗑️ Hapus #{i}", callback_data=f"act:del:{it.id}"),
-                ])
-
-        lines.append("\n_Gunakan tombol di bawah atau ketik `/bump <nomor>` / `/remove <nomor>`_")
-        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
-        await update.message.reply_text("\n".join(lines), reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+        text, reply_markup = _render_queue_message(items, page=1)
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
     @_cmd
     async def cmd_remove(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -852,33 +902,28 @@ class Handlers:
         if user_id:
             self._last_pesan_time[user_id] = time.time()
 
-        item_id = self.queue.add(
-            chat_id=update.effective_chat.id if update.effective_chat else 0,
-            track_uri="msg:announcement",
-            title="📢 Pengumuman Radio",
-            artist=f"{who}",
-            duration_ms=0,
-            requested_by=who,
-            source_type="message",
-            shoutout_to=shoutout_to,
-            shoutout_message=shoutout,
-        )
-
-        # Dahulukan ke posisi #1 di antrian
-        self.queue.bump_to_front(item_id)
-
-        # Interupsi instan: jika sedang ada lagu berputar, hentikan seketika agar pesan disiarkan detik ini juga
-        was_interrupted = False
-        if self.settings.music_source == "youtube" and self.audio_engine:
-            if self.audio_engine.state.is_running:
-                was_interrupted = True
-                self.audio_engine.stop()
-
-        status_notice = (
-            "⚡ *Interupsi Instan Aktif:* Lagu saat ini dijeda seketika. Penyiar AI langsung mengudara sekarang juga!"
-            if was_interrupted
-            else "Penyiar AI akan membacakannya sekarang di aliran siaran."
-        )
+        # Kirim langsung ke AlertManager untuk live ducking overlay instan tanpa ganggu antrean lagu
+        if self.alert_manager:
+            asyncio.create_task(self.alert_manager.enqueue_alert(
+                requested_by=who,
+                shoutout_to=shoutout_to,
+                message=shoutout,
+            ))
+            status_notice = "⚡ *Live Alert Disiarkan:* Pesan sedang disiapkan dan disuntikkan langsung di atas siaran musik sekarang juga!"
+        else:
+            item_id = self.queue.add(
+                chat_id=update.effective_chat.id if update.effective_chat else 0,
+                track_uri="msg:announcement",
+                title="📢 Pengumuman Radio",
+                artist=f"{who}",
+                duration_ms=0,
+                requested_by=who,
+                source_type="message",
+                shoutout_to=shoutout_to,
+                shoutout_message=shoutout,
+            )
+            self.queue.bump_to_front(item_id)
+            status_notice = "Penyiar AI akan membacakannya di giliran berikutnya."
 
         await update.message.reply_text(
             f"📢 *Pengumuman Disiarkan!*\n"
