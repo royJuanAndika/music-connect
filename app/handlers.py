@@ -903,28 +903,32 @@ class Handlers:
         if user_id:
             self._last_pesan_time[user_id] = time.time()
 
-        # Kirim langsung ke AlertManager untuk live ducking overlay instan tanpa ganggu antrean lagu
-        if self.alert_manager:
-            asyncio.create_task(self.alert_manager.enqueue_alert(
-                requested_by=who,
-                shoutout_to=shoutout_to,
-                message=shoutout,
-            ))
-            status_notice = "⚡ *Live Alert Disiarkan:* Pesan sedang disiapkan dan disuntikkan langsung di atas siaran musik sekarang juga!"
-        else:
-            item_id = self.queue.add(
-                chat_id=update.effective_chat.id if update.effective_chat else 0,
-                track_uri="msg:announcement",
-                title="📢 Pengumuman Radio",
-                artist=f"{who}",
-                duration_ms=0,
-                requested_by=who,
-                source_type="message",
-                shoutout_to=shoutout_to,
-                shoutout_message=shoutout,
-            )
-            self.queue.bump_to_front(item_id)
-            status_notice = "Penyiar AI akan membacakannya di giliran berikutnya."
+        # Masukkan ke antrean prioritas darurat paling depan (#1) agar langsung disiarkan
+        item_id = self.queue.add(
+            chat_id=update.effective_chat.id if update.effective_chat else 0,
+            track_uri="msg:announcement",
+            title="📢 Pengumuman Radio",
+            artist=f"{who}",
+            duration_ms=0,
+            requested_by=who,
+            source_type="message",
+            shoutout_to=shoutout_to,
+            shoutout_message=shoutout,
+        )
+        self.queue.bump_to_front(item_id)
+
+        # Jika sedang memutar lagu biasa, skip/hentikan lagu seketika agar broadcast loop langsung memutar pesan suara
+        was_interrupted = False
+        if self.settings.music_source == "youtube" and self.audio_engine:
+            if self.audio_engine.state.is_running:
+                was_interrupted = True
+                self.audio_engine.stop()
+
+        status_notice = (
+            "⚡ *Interupsi Instan:* Lagu dijeda seketika. Penyiar AI langsung mengudara sekarang membacakan pesan!"
+            if was_interrupted
+            else "📢 *Pesan Diterima:* Penyiar AI langsung membacakan pesan sekarang di siaran!"
+        )
 
         await update.message.reply_text(
             f"📢 *Pengumuman Disiarkan!*\n"
