@@ -489,10 +489,15 @@ class AudioEngine:
         log.info(f"Injeksi live alert: {voice_file.name}")
         self.state.is_host_speaking = True
         try:
-            # Jika proses siaran sedang aktif, kita tandai status host sedang bicara
-            # dan tunggu durasi audio alert selesai agar state host_speaking akurat
-            dur = self.get_duration(voice_file)
-            await asyncio.sleep(dur or 5)
+            # Estimasi durasi audio atau fallback 5 detik
+            dur = 5.0
+            try:
+                size = voice_file.stat().st_size
+                # Rata-rata MP3/Opus ~ 16KB per detik
+                dur = max(3.0, min(20.0, size / 16000.0))
+            except Exception:
+                dur = 5.0
+            await asyncio.sleep(dur)
         finally:
             self.state.is_host_speaking = False
 
