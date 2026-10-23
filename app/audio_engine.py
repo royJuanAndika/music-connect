@@ -682,8 +682,8 @@ class AudioEngine:
             if proc and proc.returncode not in (0, -15, 255):
                 err_str = stderr.decode(errors="ignore")[-200:] if stderr else ""
                 log.warning(f"play_standby_sync exit {proc.returncode}: {err_str}")
-                if output_rtmp and "rtmp" in err_str.lower():
-                    time.sleep(2)
+                if output_rtmp and any(k in err_str.lower() for k in ("rtmp", "timed out", "connection refused", "input/output error")):
+                    time.sleep(3)
         finally:
             self._process = None
             self.state.is_running = False
