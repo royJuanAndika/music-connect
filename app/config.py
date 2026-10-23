@@ -66,8 +66,8 @@ class Settings:
 
     # Broadcast Engine & Stream Output
     stream_mode: str = "hls"
-    stream_bitrate: str = "128k"
-    stream_sample_rate: int = 44100
+    stream_bitrate: str = "192k"
+    stream_sample_rate: int = 48000
     stream_channels: int = 2
     hls_segment_seconds: int = 2
     hls_dir: Path = Path("data/hls")
@@ -94,8 +94,10 @@ class Settings:
     piper_model: str = "models/id_ID-news-medium.onnx"
     host_max_chars: int = 400
     duck_level: float = 0.03
-    duck_attack_ms: int = 15
-    duck_release_ms: int = 600
+    duck_attack_ms: int = 30
+    duck_release_ms: int = 1200
+    duck_ratio: float = 5.0
+    audio_limiter_enabled: bool = True
 
     # Interaksi & Moderasi
     shoutout_enabled: bool = True
@@ -225,8 +227,8 @@ def load_settings() -> Settings:
 
         # Broadcast Engine & Stream Output
         stream_mode=os.getenv("STREAM_MODE", "hls").strip().lower(),
-        stream_bitrate=os.getenv("STREAM_BITRATE", "128k").strip(),
-        stream_sample_rate=int(os.getenv("STREAM_SAMPLE_RATE", "44100")),
+        stream_bitrate=os.getenv("STREAM_BITRATE", "192k").strip(),
+        stream_sample_rate=int(os.getenv("STREAM_SAMPLE_RATE", "48000")),
         stream_channels=int(os.getenv("STREAM_CHANNELS", "2")),
         hls_segment_seconds=int(os.getenv("HLS_SEGMENT_SECONDS", "2")),
         hls_dir=hls_dir,
@@ -255,9 +257,11 @@ def load_settings() -> Settings:
         piper_path=os.getenv("PIPER_PATH", "bin/piper.exe").strip(),
         piper_model=os.getenv("PIPER_MODEL", "models/id_ID-news-medium.onnx").strip(),
         host_max_chars=int(os.getenv("HOST_MAX_CHARS", "400")),
-        duck_level=float(os.getenv("DUCK_LEVEL", "0.25")),
-        duck_attack_ms=int(os.getenv("DUCK_ATTACK_MS", "200")),
-        duck_release_ms=int(os.getenv("DUCK_RELEASE_MS", "800")),
+        duck_level=float(os.getenv("DUCK_LEVEL", "0.03")),
+        duck_attack_ms=int(os.getenv("DUCK_ATTACK_MS", "30")),
+        duck_release_ms=int(os.getenv("DUCK_RELEASE_MS", "1200")),
+        duck_ratio=float(os.getenv("DUCK_RATIO", "5.0")),
+        audio_limiter_enabled=_to_bool(os.getenv("AUDIO_LIMITER_ENABLED", "true"), default=True),
 
         # Interaksi & Moderasi
         shoutout_enabled=_to_bool(os.getenv("SHOUTOUT_ENABLED", "true"), default=True),

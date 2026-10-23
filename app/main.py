@@ -153,16 +153,21 @@ async def _broadcast_loop(
                         shoutout_to=item.shoutout_to,
                         shoutout_message=item.shoutout_message,
                     )
+                    log.info(f"Naskah pesan #{item.id} siap: '{script[:80]}...'")
                     voice_file = await tts.synthesize_async(script)
                     queue_store.update_item(item.id, shoutout_audio_path=str(voice_file))
 
                     if audio_engine.is_available():
+                        log.info(f"Menyiarkan pesan #{item.id} ke stream (HLS/RTMP)...")
                         await asyncio.to_thread(
                             audio_engine.play_message_sync,
                             voice_file=voice_file,
                             shoutout_to=item.shoutout_to,
                             message=item.shoutout_message,
                         )
+                        log.info(f"Selesai menyiarkan pesan #{item.id}")
+                    else:
+                        log.warning(f"AudioEngine tidak tersedia untuk memutar pesan #{item.id}")
                 except Exception as e:
                     log.error(f"Gagal menyiarkan pesan #{item.id}: {e}", exc_info=True)
                 finally:
