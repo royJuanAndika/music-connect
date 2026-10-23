@@ -385,32 +385,40 @@ class AudioEngine:
         self.state.is_host_speaking = bool(voice_file and voice_file.is_file())
         self.state.started_at = time.time()
 
-        try:
-            self._process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-            _, stderr = self._process.communicate()
-            proc = self._process
-            if proc and proc.returncode not in (0, -15, 255):
-                err_str = stderr.decode(errors="ignore")[-300:] if stderr else ""
-                log.warning(f"FFmpeg berhenti dengan exit code {proc.returncode}: {err_str}")
-                # Jika RTMP gagal (misal RTMPS Telegram putus/key kadaluarsa), coba putar ulang HLS saja agar web tetap hidup
-                if output_rtmp and "rtmp" in err_str.lower():
-                    log.warning("Koneksi RTMP Telegram ditolak/terputus, melanjutkan pemutaran di Web HLS saja...")
-                    fallback_cmd = self.build_ffmpeg_cmd(
-                        music_file,
-                        voice_file,
-                        output_hls=True,
-                        output_rtmp=False,
-                    )
-                    self._process = subprocess.Popen(fallback_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                    self._process.communicate()
-        finally:
-            self._process = None
-            self.state.is_running = False
-            self.state.is_host_speaking = False
+        retries = 2 if output_rtmp else 1
+        for attempt in range(retries):
+            try:
+                self._process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+                _, stderr = self._process.communicate()
+                proc = self._process
+                if proc and proc.returncode not in (0, -15, 255):
+                    err_str = stderr.decode(errors="ignore")[-300:] if stderr else ""
+                    log.warning(f"FFmpeg berhenti dengan exit code {proc.returncode}: {err_str}")
+                    # Jika gagal instan (< 5 detik) saat mencoba RTMP, coba lagi sekali setelah jeda (tunggu socket Telegram rilis)
+                    if output_rtmp and (time.time() - self.state.started_at) < 5 and attempt < retries - 1:
+                        log.warning(f"Koneksi RTMP Telegram belum siap, mencoba lagi dalam 2 detik (attempt {attempt + 1}/{retries})...")
+                        time.sleep(2)
+                        continue
+                    # Jika tetap gagal RTMP, putar HLS saja agar web tetap hidup
+                    if output_rtmp and "rtmp" in err_str.lower():
+                        log.warning("Koneksi RTMP Telegram ditolak/terputus, melanjutkan pemutaran di Web HLS saja...")
+                        fallback_cmd = self.build_ffmpeg_cmd(
+                            music_file,
+                            voice_file,
+                            output_hls=True,
+                            output_rtmp=False,
+                        )
+                        self._process = subprocess.Popen(fallback_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                        self._process.communicate()
+                break
+            finally:
+                self._process = None
+                self.state.is_running = False
+                self.state.is_host_speaking = False
 
     def build_standby_cmd(
         self,
@@ -477,13 +485,17 @@ class AudioEngine:
         return cmd
 
     def stop(self) -> None:
-        """Hentikan siaran yang sedang berjalan (thread-safe, tanpa langsung menimpa _process)."""
+        """Hentikan siaran yang sedang berjalan secara sopan (graceful SIGTERM)."""
         proc = self._process
         if proc:
             try:
                 proc.terminate()
+                proc.wait(timeout=3)
             except Exception:
-                pass
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
         self.state.is_running = False
 
     def play_standby_sync(self, duration_sec: int = 10) -> None:
@@ -507,7 +519,13 @@ class AudioEngine:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
-            self._process.communicate()
+            _, stderr = self._process.communicate()
+            proc = self._process
+            if proc and proc.returncode not in (0, -15, 255):
+                err_str = stderr.decode(errors="ignore")[-200:] if stderr else ""
+                log.warning(f"play_standby_sync exit {proc.returncode}: {err_str}")
+                if output_rtmp and "rtmp" in err_str.lower():
+                    time.sleep(2)
         finally:
             self._process = None
             self.state.is_running = False

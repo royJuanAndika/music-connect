@@ -21,5 +21,7 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             docker compose build radio
+            docker compose stop -t 15 radio
+            sleep 2
             docker compose up -d radio
-            docker top radio-stream-ai
+            docker compose top radio
