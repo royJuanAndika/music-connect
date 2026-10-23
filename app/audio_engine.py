@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import subprocess
+import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -51,6 +54,10 @@ class AudioEngine:
         self.bin_path = str(info.path) if info.is_available and info.path else "ffmpeg"
         self.state = BroadcastState()
         self._process: Optional[subprocess.Popen] = None
+        self._alert_queue: deque[Path] = deque()
+        self._alert_thread: Optional[threading.Thread] = None
+        self._alert_running = False
+        self._fifo_path = Path("/tmp/radio_alert.fifo") if os.name != "nt" else self.settings.data_dir / "radio_alert.fifo"
 
     def is_available(self) -> bool:
         info = resolve_binary("ffmpeg", self.settings.ffmpeg_path)
@@ -93,13 +100,119 @@ class AudioEngine:
             filter_str = f"{base}[out_hls]"
             return filter_str, "[out_hls]", ""
 
-    def build_message_cmd(
-        self,
-        voice_file: Path,
-        bed_file: Optional[Path] = None,
-        output_hls: bool = True,
-        output_rtmp: bool = False,
-    ) -> list[str]:
+    def _ensure_fifo(self) -> None:
+        """Siapkan FIFO file di sistem operasi Unix untuk live stream mixing."""
+        if os.name != "nt":
+            try:
+                if self._fifo_path.exists():
+                    if not self._fifo_path.is_fifo():
+                        self._fifo_path.unlink()
+                        os.mkfifo(str(self._fifo_path))
+                else:
+                    os.mkfifo(str(self._fifo_path))
+            except Exception as e:
+                log.warning(f"Gagal inisialisasi FIFO {self._fifo_path}: {e}")
+
+    def _start_alert_feeder(self) -> None:
+        """Menjalankan thread pengumpan audio alert (silence generator + alert playback) ke FIFO."""
+        if os.name == "nt":
+            return
+        self._ensure_fifo()
+        self._alert_running = True
+        self._alert_thread = threading.Thread(target=self._alert_feeder_worker, daemon=True)
+        self._alert_thread.start()
+
+    def _stop_alert_feeder(self) -> None:
+        """Hentikan thread pengumpan alert."""
+        self._alert_running = False
+
+    def _alert_feeder_worker(self) -> None:
+        """Worker thread yang terus menerus menyuapkan audio PCM 16-bit 44.1kHz Stereo ke FIFO."""
+        sample_rate = self.settings.stream_sample_rate
+        channels = self.settings.stream_channels
+        bytes_per_sec = sample_rate * channels * 2
+        chunk_size = bytes_per_sec // 10  # 100ms chunk
+        silence_chunk = b"\x00" * chunk_size
+
+        try:
+            # Buka FIFO untuk penulisan
+            fifo_fd = os.open(str(self._fifo_path), os.O_WRONLY)
+            with os.fdopen(fifo_fd, "wb") as fifo:
+                while self._alert_running:
+                    # Cek apakah ada antrean file audio alert
+                    if self._alert_queue:
+                        alert_file = self._alert_queue.popleft()
+                        if alert_file.is_file():
+                            log.info(f"Mengalirkan file alert ke FIFO: {alert_file.name}")
+                            self.state.is_host_speaking = True
+                            # Decode audio alert ke raw PCM s16le via ffmpeg subproses ringan
+                            decode_cmd = [
+                                self.bin_path, "-v", "error", "-y",
+                                "-i", str(alert_file),
+                                "-f", "s16le",
+                                "-ar", str(sample_rate),
+                                "-ac", str(channels),
+                                "-"
+                            ]
+                            try:
+                                dec_proc = subprocess.Popen(decode_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                                while self._alert_running:
+                                    raw_audio = dec_proc.stdout.read(chunk_size)
+                                    if not raw_audio:
+                                        break
+                                    fifo.write(raw_audio)
+                                    fifo.flush()
+                                    time.sleep(0.09)
+                                dec_proc.wait(timeout=2)
+                            except Exception as ex:
+                                log.warning(f"Error streaming alert file {alert_file.name}: {ex}")
+                            finally:
+                                self.state.is_host_speaking = False
+                                try:
+                                    alert_file.unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                            continue
+
+                    # Jika tidak ada alert, kirim silence (keheningan) agar FFmpeg input tidak kelaparan (starve)
+                    fifo.write(silence_chunk)
+                    fifo.flush()
+                    time.sleep(0.095)
+        except Exception as e:
+            if self._alert_running:
+                log.warning(f"Alert feeder loop terhenti: {e}")
+
+    def build_live_ducking_filter(self, output_hls: bool = True, output_rtmp: bool = False) -> tuple[str, str, str]:
+        """Filter ducking interaktif untuk live alert mixing.
+        
+        [0:a] Musik dari file lagu.
+        [1:a] Stream interaktif dari FIFO (silence biasa, bersuara saat alert masuk).
+        """
+        level = self.settings.duck_level
+        attack = self.settings.duck_attack_ms
+        release = self.settings.duck_release_ms
+        ratio = getattr(self.settings, "duck_ratio", 5.0)
+        limiter = ",alimiter=limit=0.95:attack=5:release=50:asc=1" if getattr(self.settings, "audio_limiter_enabled", True) else ""
+
+        # Filter vokal alert
+        voice_prep = "[1:a]highpass=f=80,volume=1.8[v_alert]"
+
+        # Sidechain: jika ada suara di 1:a, volume 0:a otomatis tertekan
+        base = (
+            f"[0:a][1:a]sidechaincompress=threshold={level}:ratio={ratio}:attack={attack}:release={release}[ducked];"
+            f"{voice_prep};"
+            f"[ducked][v_alert]amix=inputs=2:duration=first:dropout_transition=0{limiter}"
+        )
+
+        if output_hls and output_rtmp:
+            filter_str = f"{base},asplit=2[out_hls][out_rtmp]"
+            return filter_str, "[out_hls]", "[out_rtmp]"
+        elif output_rtmp:
+            filter_str = f"{base}[out_rtmp]"
+            return filter_str, "", "[out_rtmp]"
+        else:
+            filter_str = f"{base}[out_hls]"
+            return filter_str, "[out_hls]", ""
         """Menyusun argumen FFmpeg untuk memutar pesan suara host dengan musik latar (Radio Bed) melirih."""
         cmd = [self.bin_path, "-y", "-re"]
 
@@ -270,6 +383,7 @@ class AudioEngine:
         voice_file: Optional[Path] = None,
         output_hls: bool = True,
         output_rtmp: bool = False,
+        use_live_alert_fifo: bool = False,
     ) -> list[str]:
         """Menyusun argumen baris perintah FFmpeg untuk mencampur audio dan menyiarkan."""
         # Input 0: musik
@@ -279,17 +393,31 @@ class AudioEngine:
         audio_map_rtmp = "0:a"
         filter_complex = []
 
-        # Input 1: Voice host jika ada
-        has_voice = bool(voice_file and Path(voice_file).is_file())
-        if has_voice:
-            cmd.extend(["-i", str(voice_file)])
-            filt_str, map_hls, map_rtmp = self.build_ducking_filter(output_hls, output_rtmp)
+        # Cek apakah menggunakan live alert FIFO (Opsi B: real-time in-song ducking)
+        if use_live_alert_fifo and os.name != "nt" and self._fifo_path.is_fifo():
+            sample_rate = self.settings.stream_sample_rate
+            channels = self.settings.stream_channels
+            cmd.extend([
+                "-f", "s16le",
+                "-ar", str(sample_rate),
+                "-ac", str(channels),
+                "-i", str(self._fifo_path),
+            ])
+            filt_str, map_hls, map_rtmp = self.build_live_ducking_filter(output_hls, output_rtmp)
             filter_complex.append(filt_str)
             audio_map_hls = map_hls
             audio_map_rtmp = map_rtmp
-
-        # Input video untuk Telegram RTMP (Input 2 jika ada voice, Input 1 jika tanpa voice)
-        video_input_idx = 2 if has_voice else 1
+            video_input_idx = 2
+        else:
+            # Input 1: Voice host statis jika ada
+            has_voice = bool(voice_file and Path(voice_file).is_file())
+            if has_voice:
+                cmd.extend(["-i", str(voice_file)])
+                filt_str, map_hls, map_rtmp = self.build_ducking_filter(output_hls, output_rtmp)
+                filter_complex.append(filt_str)
+                audio_map_hls = map_hls
+                audio_map_rtmp = map_rtmp
+            video_input_idx = 2 if has_voice else 1
         res = self.settings.rtmp_video_resolution
         fps = self.settings.rtmp_video_fps
         v_bitrate = self.settings.rtmp_video_bitrate
@@ -370,11 +498,17 @@ class AudioEngine:
             and bool(self.settings.rtmp_url)
         )
 
+        # Nyalakan alert feeder thread untuk live in-song mixing jika sistem operasi mendukung
+        use_fifo = (os.name != "nt")
+        if use_fifo:
+            self._start_alert_feeder()
+
         cmd = self.build_ffmpeg_cmd(
             music_file,
             voice_file,
             output_hls=output_hls,
             output_rtmp=output_rtmp,
+            use_live_alert_fifo=use_fifo,
         )
 
         self.state.is_running = True
@@ -411,11 +545,13 @@ class AudioEngine:
                             voice_file,
                             output_hls=True,
                             output_rtmp=False,
+                            use_live_alert_fifo=False,
                         )
                         self._process = subprocess.Popen(fallback_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
                         self._process.communicate()
                 break
             finally:
+                self._stop_alert_feeder()
                 self._process = None
                 self.state.is_running = False
                 self.state.is_host_speaking = False
@@ -487,19 +623,19 @@ class AudioEngine:
     async def inject_live_alert(self, voice_file: Path) -> None:
         """Menyuntikkan file audio alert ke live stream secara asinkron."""
         log.info(f"Injeksi live alert: {voice_file.name}")
-        self.state.is_host_speaking = True
-        try:
-            # Estimasi durasi audio atau fallback 5 detik
+        # Tambahkan ke antrean feeder FIFO jika feeder aktif
+        if self._alert_running:
+            self._alert_queue.append(voice_file)
+            # Tunggu durasi audio alert selesai dimainkan
             dur = 5.0
             try:
                 size = voice_file.stat().st_size
-                # Rata-rata MP3/Opus ~ 16KB per detik
-                dur = max(3.0, min(20.0, size / 16000.0))
+                dur = max(3.0, min(30.0, size / 16000.0))
             except Exception:
                 dur = 5.0
             await asyncio.sleep(dur)
-        finally:
-            self.state.is_host_speaking = False
+        else:
+            log.warning("Alert feeder tidak aktif (tidak ada lagu berjalan atau non-Unix).")
 
     def stop(self) -> None:
         """Hentikan siaran yang sedang berjalan secara sopan (graceful SIGTERM)."""
