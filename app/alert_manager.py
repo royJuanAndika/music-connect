@@ -99,7 +99,7 @@ class AlertManager:
                     script = await self.llm.generate_announcement_script(
                         requested_by=alert.requested_by,
                         shoutout_to=alert.shoutout_to,
-                        message=alert.message,
+                        shoutout_message=alert.message,
                     )
                 except Exception as e:
                     log.warning(f"Gagal generate naskah LLM: {e}, menggunakan teks dasar.")
@@ -108,10 +108,10 @@ class AlertManager:
                     to_part = f" untuk {alert.shoutout_to}" if alert.shoutout_to else ""
                     script = f"Perhatian para pendengar. Ada titipan pesan dari {alert.requested_by}{to_part}. Pesannya berbunyi: {alert.message}."
 
-                # 2. Render suara via PiperTTS
+                # 2. Render suara via TTS
                 voice_path = None
                 try:
-                    voice_path = await self.tts.synthesize(script, prefix="live_alert")
+                    voice_path = await self.tts.synthesize_async(script)
                 except Exception as e:
                     log.error(f"Gagal sintesis suara alert TTS: {e}")
 
