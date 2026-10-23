@@ -172,34 +172,47 @@ class LLMClient:
         requested_by: str = "Admin",
         shoutout_to: str = "semua pendengar",
         shoutout_message: str = "",
+        is_anonymous: bool = False,
     ) -> str:
-        """Susun naskah pengumuman radio FM mandiri (pesan saja) dengan template presisi bawaan."""
+        """Susun naskah pengumuman radio FM mandiri (pesan saja) bergaya siaran paragraf luwes."""
         max_chars = self.settings.host_max_chars
-
-        # Template lugas dan manis tanpa improvisasi aneh AI
-        target_text = f"untuk {shoutout_to}" if shoutout_to and shoutout_to.lower() != "semua pendengar" else "untuk kita semua"
         clean_msg = shoutout_message.strip()
-        fallback_script = (
-            f"Ada titipan pesan nih dari {requested_by} {target_text}: {clean_msg}"
-        )
+        target_text = f"buat {shoutout_to}" if shoutout_to and shoutout_to.lower() not in ("semua pendengar", "kita semua") else "buat kawan pendengar semua"
 
-        # Jika HOST_USE_LLM bernilai false (default), langsung pakai template instan 0 detik
+        if is_anonymous or not requested_by or requested_by.lower() in ("anonim", "admin"):
+            fallback_script = (
+                f"Halo kawan radio, ada titipan kabar hangat nih {target_text}. "
+                f"Katanya: \"{clean_msg}\". Semoga harimu menyenangkan dan tetap stay tune ya!"
+            )
+        else:
+            fallback_script = (
+                f"Halo kawan radio, ada titipan pesan hangat nih dari {requested_by} {target_text}. "
+                f"Isinya: \"{clean_msg}\". Semangat terus dan selamat menikmati siaran musik kita!"
+            )
+
         if not self.settings.host_use_llm or not self.enabled:
             return fallback_script[:max_chars]
 
         persona = self.settings.host_persona
+        sender_instruction = (
+            "Jangan sebutkan nama pengirim sama sekali (pesan bersifat anonim / pesan resmi siaran)."
+            if is_anonymous
+            else f"Sebutkan bahwa pesan ini dikirim oleh {requested_by}."
+        )
+
         prompt = (
-            f"Kamu adalah Penyiar Radio FM bernama DJ Connect. Persona: {persona}.\n"
-            f"Ada pengumuman / pesan siaran masuk dari: {requested_by}.\n"
-            f"Ditujukan untuk: {shoutout_to}.\n"
-            f"Isi pengumuman: \"{shoutout_message}\".\n\n"
+            f"Kamu adalah Penyiar Radio FM profesional dan bersahabat bernama DJ Connect. Persona: {persona}.\n"
+            f"Tujuan: {shoutout_to}.\n"
+            f"Isi pesan pendengar: \"{clean_msg}\".\n"
+            f"Ketentuan pengirim: {sender_instruction}\n\n"
             f"TUGAS:\n"
-            f"Buat naskah penyiar radio FM yang luwes, akrab, dan santai untuk membacakan pesan tersebut "
-            f"sebagai selingan siaran (intermezzo). Maksimal {max_chars} karakter tanpa tanda petik."
+            f"Tulis 1 paragraf narasi siaran radio yang luwes, santai, dan hidup seperti penyiar radio sungguhan "
+            f"yang sedang menyapa pendengar di udara. Bacakan intisari pesannya dengan nada akrab dan tutup dengan transisi manis kembali ke musik. "
+            f"Maksimal {max_chars} karakter. Jangan pakai tanda petik atau format markdown."
         )
 
         messages = [
-            {"role": "system", "content": "Kamu adalah Penyiar Radio FM Indonesia yang ramah dan akrab."},
+            {"role": "system", "content": "Kamu adalah Penyiar Radio FM Indonesia yang ramah, hangat, dan alami."},
             {"role": "user", "content": prompt},
         ]
 

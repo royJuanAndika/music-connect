@@ -146,6 +146,8 @@ class Handlers:
         self.downloader = None  # YouTubeDownloader | None
         self.alert_manager = None  # AlertManager | None
         self._last_pesan_time: dict[int, float] = {}  # user_id -> timestamp
+        self._pesan_history: dict[int, list[float]] = {}  # user_id -> list of timestamps in last hour
+        self._pending_pesan: dict[str, dict] = {}  # token -> {data alert}
 
     def set_radio_components(self, audio_engine, downloader) -> None:
         self.audio_engine = audio_engine
@@ -275,6 +277,78 @@ class Handlers:
                     pass
             else:
                 await query.answer("Lagu tidak ditemukan / sudah terhapus.", show_alert=True)
+            return
+
+        # 3d. Action: Approval Pesan Admin (apprv:ok:<token> / apprv:no:<token>)
+        if data.startswith("apprv:"):
+            is_admin = bool(user and user.id in self.settings.allowed_telegram_ids)
+            if not is_admin:
+                return await query.answer("⛔ Hanya admin yang bisa menyetujui pesan siaran.", show_alert=True)
+
+            parts = data.split(":")
+            action = parts[1]
+            token = parts[2]
+            pdata = self._pending_pesan.pop(token, None)
+
+            if not pdata:
+                return await query.answer("⚠️ Pesan ini sudah diproses atau kedaluwarsa.", show_alert=True)
+
+            if action == "no":
+                await query.answer("❌ Pesan ditolak.")
+                try:
+                    await query.edit_message_text(
+                        f"❌ *Pesan Ditolak oleh {who}:*\n"
+                        f"Dari: {pdata['requested_by']}\n"
+                        f"Target: {pdata['shoutout_to']}\n"
+                        f"Isi: \"{pdata['shoutout_message']}\"",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                except Exception:
+                    pass
+                return
+
+            # Action approve: kirim langsung ke siaran
+            p_who = pdata["requested_by"]
+            p_to = pdata["shoutout_to"]
+            p_msg = pdata["shoutout_message"]
+            p_chat_id = pdata["chat_id"]
+            p_anon = pdata["is_anonymous"]
+
+            # Siarkan via live alert FIFO atau queue
+            if self.audio_engine and self.audio_engine.state.is_running and self.audio_engine.state.current_title != "Radio Standby" and self.alert_manager:
+                asyncio.create_task(self.alert_manager.enqueue_alert(
+                    requested_by=p_who,
+                    shoutout_to=p_to,
+                    message=p_msg,
+                    is_anonymous=p_anon,
+                ))
+            else:
+                item_id = self.queue.add(
+                    chat_id=p_chat_id,
+                    track_uri="msg:announcement",
+                    title="📢 Pengumuman Radio",
+                    artist=f"{p_who}",
+                    duration_ms=0,
+                    requested_by=p_who,
+                    source_type="message",
+                    shoutout_to=p_to,
+                    shoutout_message=p_msg,
+                )
+                self.queue.bump_to_front(item_id)
+                if self.audio_engine and self.audio_engine.state.is_running and self.audio_engine.state.current_title == "Radio Standby":
+                    self.audio_engine.stop()
+
+            await query.answer("✅ Pesan disetujui dan langsung mengudara!")
+            try:
+                await query.edit_message_text(
+                    f"✅ *Pesan Disetujui oleh {who} & Mengudara Sekarang!*\n"
+                    f"Dari: {p_who}\n"
+                    f"Target: {p_to}\n"
+                    f"Isi: \"{p_msg}\"",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception:
+                pass
             return
 
         # 4. Action: Queue track dari tombol search YouTube (qyt:<video_id>)
@@ -856,6 +930,7 @@ class Handlers:
         """Kirim pengumuman suara siaran mandiri:
         Format: /pesan untuk <Target> | <Isi Pesan>
         Atau: /pesan <Isi Pesan>
+        Khusus Admin: /pesan anon | <Isi Pesan> (Tanpa disebut username pengirim)
         """
         if not self._allowed(update):
             return await self._deny(update)
@@ -864,44 +939,123 @@ class Handlers:
         user_id = user.id if user else 0
         is_admin = bool(user and user.id in self.settings.allowed_telegram_ids)
 
-        # Cooldown check (5 menit default, lewati jika admin)
-        if not is_admin and user_id:
-            now = time.time()
-            last_time = self._last_pesan_time.get(user_id, 0.0)
-            elapsed = now - last_time
-            if elapsed < self.settings.message_cooldown_sec:
-                rem_sec = int(self.settings.message_cooldown_sec - elapsed)
-                rem_min = rem_sec // 60
-                rem_rem_sec = rem_sec % 60
-                wait_text = f"{rem_min} menit {rem_rem_sec} detik" if rem_min > 0 else f"{rem_sec} detik"
-                return await update.message.reply_text(
-                    f"⏳ Harap tunggu *{wait_text}* sebelum mengirim `/pesan` berikutnya.",
-                    parse_mode=ParseMode.MARKDOWN,
-                )
-
         raw = " ".join(ctx.args).strip()
         if not raw:
+            admin_hint = "\n💡 _Admin bisa anonim:_ `/pesan anon | Pesan pengumuman`" if is_admin else ""
             return await update.message.reply_text(
-                "Gunakan format:\n"
+                "📢 *Format Perintah Pesan Suara:*\n"
                 "`/pesan untuk <Target> | <Isi Pesan>`\n"
-                "Atau: `/pesan <Isi Pesan>`",
+                "Atau cukup isi pesan langsung:\n"
+                "`/pesan <Isi Pesan>`" + admin_hint,
                 parse_mode=ParseMode.MARKDOWN,
             )
+
+        shoutout_to = "semua pendengar"
+        shoutout = raw
+        is_anonymous = False
 
         if "|" in raw:
             parts = [p.strip() for p in raw.split("|", 1)]
             target_raw = parts[0]
             shoutout = parts[1]
-            shoutout_to = target_raw[5:].strip() if target_raw.lower().startswith("untuk ") else target_raw
-        else:
-            shoutout_to = "semua pendengar"
-            shoutout = raw
+            if target_raw.lower() in ("anon", "anonim", "rahasia"):
+                if is_admin:
+                    is_anonymous = True
+                    shoutout_to = "semua pendengar"
+                else:
+                    return await update.message.reply_text("⛔ Fitur pesan anonim hanya dapat digunakan oleh admin radio.")
+            elif target_raw.lower().startswith("untuk "):
+                shoutout_to = target_raw[6:].strip()
+            elif target_raw:
+                shoutout_to = target_raw
+        elif raw.lower().startswith("untuk "):
+            target_and_msg = raw[6:].strip()
+            if " " in target_and_msg:
+                t_parts = target_and_msg.split(" ", 1)
+                shoutout_to = t_parts[0]
+                shoutout = t_parts[1].strip()
+
+        if not shoutout:
+            return await update.message.reply_text("⚠️ Isi pesan tidak boleh kosong.")
 
         who = f"@{user.username}" if (user and user.username) else ((user.first_name if user else "Anonim") or "Anonim")
+        now = time.time()
 
-        # Catat waktu pengiriman untuk cooldown
+        # Aturan Kuota Pesan (Bukan Admin: Maks 3 pesan per jam, selebihnya butuh approval admin)
+        needs_admin_approval = False
+        if not is_admin and user_id:
+            # 1. Bersihkan riwayat pengiriman lebih dari 1 jam (3600 detik)
+            history = [t for t in self._pesan_history.get(user_id, []) if now - t < 3600]
+            self._pesan_history[user_id] = history
+
+            # 2. Cek kuota per jam
+            if len(history) >= 3:
+                needs_admin_approval = True
+            else:
+                # Cek cooldown antar-pesan standar
+                last_time = self._last_pesan_time.get(user_id, 0.0)
+                elapsed = now - last_time
+                if elapsed < self.settings.message_cooldown_sec:
+                    rem_sec = int(self.settings.message_cooldown_sec - elapsed)
+                    rem_min = rem_sec // 60
+                    rem_rem_sec = rem_sec % 60
+                    wait_text = f"{rem_min} menit {rem_rem_sec} detik" if rem_min > 0 else f"{rem_sec} detik"
+                    return await update.message.reply_text(
+                        f"⏳ Harap tunggu *{wait_text}* sebelum mengirim `/pesan` berikutnya.",
+                        parse_mode=ParseMode.MARKDOWN,
+                    )
+
+        # Jika melebihi batas 3 pesan / jam -> Kirim tiket approval ke admin
+        if needs_admin_approval:
+            import uuid
+            token = uuid.uuid4().hex[:8]
+            self._pending_pesan[token] = {
+                "chat_id": update.effective_chat.id if update.effective_chat else 0,
+                "requested_by": who,
+                "shoutout_to": shoutout_to,
+                "shoutout_message": shoutout,
+                "is_anonymous": False,
+                "created_at": now,
+            }
+
+            keyboard = [
+                [
+                    InlineKeyboardButton("✅ Setujui Siaran", callback_data=f"apprv:ok:{token}"),
+                    InlineKeyboardButton("❌ Tolak", callback_data=f"apprv:no:{token}"),
+                ]
+            ]
+            markup = InlineKeyboardMarkup(keyboard)
+
+            approval_text = (
+                f"📬 *Permintaan Persetujuan Pesan Siaran (Kuota > 3/Jam)*\n\n"
+                f"👤 *Pengirim:* {who}\n"
+                f"🎯 *Untuk:* {shoutout_to}\n"
+                f"💬 *Pesan:*\n_{_escape(shoutout)}_\n\n"
+                f"_Admin, klik tombol di bawah untuk menyetujui siaran ini._"
+            )
+
+            notified_admins = False
+            for adm_id in self.settings.allowed_telegram_ids:
+                try:
+                    await ctx.bot.send_message(chat_id=adm_id, text=approval_text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+                    notified_admins = True
+                except Exception:
+                    pass
+
+            if not notified_admins:
+                await update.message.reply_text(approval_text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+
+            return await update.message.reply_text(
+                "⚠️ *Batas Kuota Tercapai:* Anda telah mengirim 3 pesan dalam 1 jam terakhir.\n"
+                "Pesan Anda telah dikirimkan ke Admin untuk persetujuan terlebih dahulu sebelum disiarkan.",
+                parse_mode=ParseMode.MARKDOWN,
+            )
+
+        # Catat pengiriman sukses
         if user_id:
-            self._last_pesan_time[user_id] = time.time()
+            self._last_pesan_time[user_id] = now
+            if not is_admin:
+                self._pesan_history.setdefault(user_id, []).append(now)
 
         # Kirim ke AlertManager jika sedang ada lagu aktif diputar (Live in-song ducking)
         if self.audio_engine and self.audio_engine.state.is_running and self.audio_engine.state.current_title != "Radio Standby" and self.alert_manager:
@@ -909,17 +1063,22 @@ class Handlers:
                 requested_by=who,
                 shoutout_to=shoutout_to,
                 message=shoutout,
+                is_anonymous=is_anonymous,
             ))
-            status_notice = "⚡ *Live Alert:* Suara penyiar AI akan langsung masuk menyapa di tengah siaran lagu sekarang (volume musik otomatis ducking lirih)!"
+            status_notice = (
+                "⚡ *Live Alert (Anonim):* Penyiar AI akan membacakan pesan sebagai kabar resmi siaran tanpa menyebut username!"
+                if is_anonymous
+                else "⚡ *Live Alert:* Suara penyiar AI akan langsung masuk menyapa di tengah siaran lagu sekarang (volume musik otomatis ducking lirih)!"
+            )
         else:
             # Standby / kosong: masukkan ke queue terdepan agar langsung disiarkan mandiri dengan radio bed
             item_id = self.queue.add(
                 chat_id=update.effective_chat.id if update.effective_chat else 0,
                 track_uri="msg:announcement",
                 title="📢 Pengumuman Radio",
-                artist=f"{who}",
+                artist="Siaran Resmi" if is_anonymous else f"{who}",
                 duration_ms=0,
-                requested_by=who,
+                requested_by="Admin" if is_anonymous else who,
                 source_type="message",
                 shoutout_to=shoutout_to,
                 shoutout_message=shoutout,
@@ -929,10 +1088,12 @@ class Handlers:
                 self.audio_engine.stop()
             status_notice = "📢 *Pesan Diterima:* Penyiar AI langsung mengudara sekarang membacakan pesan!"
 
+        sender_info = "🎭 *Mode:* Anonim (Nama disamarkan)" if is_anonymous else f"👤 *Dari:* {who}"
         await update.message.reply_text(
             f"📢 *Pengumuman Disiarkan!*\n"
-            f"🎯 Untuk: *{_escape(shoutout_to)}*\n"
-            f"💌 Pesan: \"_{_escape(shoutout)}_\"\n\n"
+            f"{sender_info}\n"
+            f"🎯 *Untuk:* {_escape(shoutout_to)}\n"
+            f"💌 *Pesan:* \"_{_escape(shoutout)}_\"\n\n"
             f"{status_notice}",
             parse_mode=ParseMode.MARKDOWN,
         )

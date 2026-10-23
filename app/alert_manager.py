@@ -21,6 +21,7 @@ class AlertItem:
     shoutout_to: str
     message: str
     created_at: float
+    is_anonymous: bool = False
 
 
 class AlertManager:
@@ -79,7 +80,13 @@ class AlertManager:
             self._worker_task = None
         self._queue = None
 
-    async def enqueue_alert(self, requested_by: str, shoutout_to: str, message: str) -> None:
+    async def enqueue_alert(
+        self,
+        requested_by: str,
+        shoutout_to: str,
+        message: str,
+        is_anonymous: bool = False,
+    ) -> None:
         """Memasukkan alert baru ke antrean live alert in-memory."""
         self.ensure_worker()
         import time
@@ -88,10 +95,11 @@ class AlertManager:
             shoutout_to=shoutout_to,
             message=message,
             created_at=time.time(),
+            is_anonymous=is_anonymous,
         )
         q = self._get_queue()
         await q.put(item)
-        log.info(f"Alert diterima dari {requested_by} untuk {shoutout_to}: '{message[:30]}...'")
+        log.info(f"Alert diterima dari {requested_by} (anon={is_anonymous}) untuk {shoutout_to}: '{message[:30]}...'")
 
     async def _process_alerts(self) -> None:
         """Background loop pemroses alert secara FIFO real-time."""
@@ -99,7 +107,7 @@ class AlertManager:
         while self._is_running:
             try:
                 alert = await q.get()
-                log.info(f"Memproses live alert dari {alert.requested_by}...")
+                log.info(f"Memproses live alert dari {alert.requested_by} (anon={alert.is_anonymous})...")
 
                 # 1. Generate naskah pesan singkat via LLM
                 script = ""
@@ -108,13 +116,17 @@ class AlertManager:
                         requested_by=alert.requested_by,
                         shoutout_to=alert.shoutout_to,
                         shoutout_message=alert.message,
+                        is_anonymous=alert.is_anonymous,
                     )
                 except Exception as e:
                     log.warning(f"Gagal generate naskah LLM: {e}, menggunakan teks dasar.")
 
                 if not script:
                     to_part = f" untuk {alert.shoutout_to}" if alert.shoutout_to else ""
-                    script = f"Perhatian para pendengar. Ada titipan pesan dari {alert.requested_by}{to_part}. Pesannya berbunyi: {alert.message}."
+                    if alert.is_anonymous:
+                        script = f"Halo kawan radio semua. Ada titipan pesan nih {to_part}. Pesannya berbunyi: {alert.message}."
+                    else:
+                        script = f"Halo kawan radio semua. Ada titipan pesan dari {alert.requested_by}{to_part}. Pesannya berbunyi: {alert.message}."
 
                 # 2. Render suara via TTS
                 voice_path = None
