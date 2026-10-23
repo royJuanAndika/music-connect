@@ -105,9 +105,12 @@ async def _post_shutdown(app: Application) -> None:
     watchdog = app.bot_data.get("watchdog")
     spotify = app.bot_data.get("spotify")
     llm = app.bot_data.get("llm")
+    audio_engine = app.bot_data.get("audio_engine")
     task = app.bot_data.get("broadcast_task")
     if task:
         task.cancel()
+    if audio_engine:
+        audio_engine.stop()
     if watchdog:
         await watchdog.stop()
     if spotify:
