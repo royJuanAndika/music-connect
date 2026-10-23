@@ -66,13 +66,20 @@ class AudioEngine:
         level = self.settings.duck_level
         attack = self.settings.duck_attack_ms
         release = self.settings.duck_release_ms
+        ratio = getattr(self.settings, "duck_ratio", 5.0)
+
+        # Filter vokal host: buang gemuruh bass bawah dan perkuat vokal agar artikulasi jernih
+        voice_prep = "[1:a]highpass=f=80,volume=1.6[v_clean]"
+
+        # Limiter anti-clipping di ujung mix jika diaktifkan
+        limiter = ",alimiter=limit=0.95:attack=5:release=50:asc=1" if getattr(self.settings, "audio_limiter_enabled", True) else ""
 
         base = (
-            f"[1:a]apad[pad_voice];"
+            f"{voice_prep};"
+            f"[v_clean]apad[pad_voice];"
             f"[0:a][pad_voice]sidechaincompress="
-            f"threshold={level}:ratio=16:attack={attack}:release={release}[ducked];"
-            f"[1:a]volume=1.8[v_boost];"
-            f"[ducked][v_boost]amix=inputs=2:duration=first:normalize=0:dropout_transition=0"
+            f"threshold={level}:ratio={ratio}:attack={attack}:release={release}[ducked];"
+            f"[ducked][v_clean]amix=inputs=2:duration=first:dropout_transition=0{limiter}"
         )
 
         if output_hls and output_rtmp:
@@ -110,16 +117,21 @@ class AudioEngine:
         # Input 1: Voice host
         cmd.extend(["-i", str(voice_file)])
 
-        # Ducking filter: volume radio bed ditekan ke 0.15 saat host bicara
-        level = 0.15
-        attack = 150
-        release = 600
-        # PENTING: amix inputs=2:duration=first di mana input 0 adalah voice_file (melalui label [v_boost])
-        # agar durasi total tepat sama dengan panjang audio pesan suara dan tidak infinite!
+        # Ducking filter: volume radio bed ditekan saat host bicara
+        level = 0.05
+        attack = 40
+        release = 800
+        ratio = getattr(self.settings, "duck_ratio", 5.0)
+        limiter = ",alimiter=limit=0.95:attack=5:release=50:asc=1" if getattr(self.settings, "audio_limiter_enabled", True) else ""
+
+        # Filter vokal pesan jernih dan hangat
+        voice_prep = "[1:a]highpass=f=80,volume=1.8[v_clean]"
+
+        # Amix duration=first pada v_clean agar panjang siaran mengikuti durasi suara pesan
         base_bed = (
-            f"[1:a]volume=1.8[v_boost];"
-            f"[0:a][v_boost]sidechaincompress=threshold={level}:ratio=16:attack={attack}:release={release}[ducked];"
-            f"[v_boost][ducked]amix=inputs=2:duration=first:normalize=0:dropout_transition=0"
+            f"{voice_prep};"
+            f"[0:a][v_clean]sidechaincompress=threshold={level}:ratio={ratio}:attack={attack}:release={release}[ducked];"
+            f"[v_clean][ducked]amix=inputs=2:duration=first:dropout_transition=0{limiter}"
         )
 
         filter_complex = []
