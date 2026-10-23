@@ -903,8 +903,8 @@ class Handlers:
         if user_id:
             self._last_pesan_time[user_id] = time.time()
 
-        # Kirim ke AlertManager untuk live ducking overlay instan di tengah lagu (Opsi B)
-        if self.alert_manager:
+        # Kirim ke AlertManager jika sedang ada lagu aktif diputar (Live in-song ducking)
+        if self.audio_engine and self.audio_engine.state.is_running and self.audio_engine.state.current_title != "Radio Standby" and self.alert_manager:
             asyncio.create_task(self.alert_manager.enqueue_alert(
                 requested_by=who,
                 shoutout_to=shoutout_to,
@@ -912,6 +912,7 @@ class Handlers:
             ))
             status_notice = "⚡ *Live Alert:* Suara penyiar AI akan langsung masuk menyapa di tengah siaran lagu sekarang (volume musik otomatis ducking lirih)!"
         else:
+            # Standby / kosong: masukkan ke queue terdepan agar langsung disiarkan mandiri dengan radio bed
             item_id = self.queue.add(
                 chat_id=update.effective_chat.id if update.effective_chat else 0,
                 track_uri="msg:announcement",
@@ -924,7 +925,9 @@ class Handlers:
                 shoutout_message=shoutout,
             )
             self.queue.bump_to_front(item_id)
-            status_notice = "📢 *Pesan Diterima:* Penyiar AI akan membacakan pesan di giliran berikutnya!"
+            if self.audio_engine and self.audio_engine.state.is_running and self.audio_engine.state.current_title == "Radio Standby":
+                self.audio_engine.stop()
+            status_notice = "📢 *Pesan Diterima:* Penyiar AI langsung mengudara sekarang membacakan pesan!"
 
         await update.message.reply_text(
             f"📢 *Pengumuman Disiarkan!*\n"

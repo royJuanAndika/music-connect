@@ -134,53 +134,58 @@ class AudioEngine:
         chunk_size = bytes_per_sec // 10  # 100ms chunk
         silence_chunk = b"\x00" * chunk_size
 
-        try:
-            # Buka FIFO untuk penulisan
-            fifo_fd = os.open(str(self._fifo_path), os.O_WRONLY)
-            with os.fdopen(fifo_fd, "wb") as fifo:
-                while self._alert_running:
-                    # Cek apakah ada antrean file audio alert
-                    if self._alert_queue:
-                        alert_file = self._alert_queue.popleft()
-                        if alert_file.is_file():
-                            log.info(f"Mengalirkan file alert ke FIFO: {alert_file.name}")
-                            self.state.is_host_speaking = True
-                            # Decode audio alert ke raw PCM s16le via ffmpeg subproses ringan
-                            decode_cmd = [
-                                self.bin_path, "-v", "error", "-y",
-                                "-i", str(alert_file),
-                                "-f", "s16le",
-                                "-ar", str(sample_rate),
-                                "-ac", str(channels),
-                                "-"
-                            ]
-                            try:
-                                dec_proc = subprocess.Popen(decode_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                                while self._alert_running:
-                                    raw_audio = dec_proc.stdout.read(chunk_size)
-                                    if not raw_audio:
-                                        break
-                                    fifo.write(raw_audio)
-                                    fifo.flush()
-                                    time.sleep(0.09)
-                                dec_proc.wait(timeout=2)
-                            except Exception as ex:
-                                log.warning(f"Error streaming alert file {alert_file.name}: {ex}")
-                            finally:
-                                self.state.is_host_speaking = False
+        while self._alert_running:
+            try:
+                # Buka FIFO untuk penulisan (blocking sampai FFmpeg membuka reader)
+                fifo_fd = os.open(str(self._fifo_path), os.O_WRONLY)
+                with os.fdopen(fifo_fd, "wb") as fifo:
+                    while self._alert_running:
+                        # Cek apakah ada antrean file audio alert
+                        if self._alert_queue:
+                            alert_file = self._alert_queue.popleft()
+                            if alert_file.is_file():
+                                log.info(f"Mengalirkan file alert ke FIFO: {alert_file.name}")
+                                self.state.is_host_speaking = True
+                                decode_cmd = [
+                                    self.bin_path, "-v", "error", "-y",
+                                    "-i", str(alert_file),
+                                    "-f", "s16le",
+                                    "-ar", str(sample_rate),
+                                    "-ac", str(channels),
+                                    "-"
+                                ]
                                 try:
-                                    alert_file.unlink(missing_ok=True)
-                                except Exception:
-                                    pass
-                            continue
+                                    dec_proc = subprocess.Popen(decode_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                                    while self._alert_running:
+                                        raw_audio = dec_proc.stdout.read(chunk_size)
+                                        if not raw_audio:
+                                            break
+                                        fifo.write(raw_audio)
+                                        fifo.flush()
+                                        time.sleep(0.09)
+                                    dec_proc.wait(timeout=2)
+                                except Exception as ex:
+                                    log.warning(f"Error streaming alert file {alert_file.name}: {ex}")
+                                finally:
+                                    self.state.is_host_speaking = False
+                                    try:
+                                        alert_file.unlink(missing_ok=True)
+                                    except Exception:
+                                        pass
+                                continue
 
-                    # Jika tidak ada alert, kirim silence (keheningan) agar FFmpeg input tidak kelaparan (starve)
-                    fifo.write(silence_chunk)
-                    fifo.flush()
-                    time.sleep(0.095)
-        except Exception as e:
-            if self._alert_running:
-                log.warning(f"Alert feeder loop terhenti: {e}")
+                        # Kirim silence agar input FFmpeg tetap mengalir lancar
+                        fifo.write(silence_chunk)
+                        fifo.flush()
+                        time.sleep(0.095)
+            except (BrokenPipeError, OSError) as e:
+                if self._alert_running:
+                    # FFmpeg mungkin berganti track / restart, tunggu sebentar lalu reconnect ke FIFO
+                    time.sleep(0.5)
+            except Exception as e:
+                if self._alert_running:
+                    log.warning(f"Alert feeder loop terhenti: {e}")
+                    time.sleep(1)
 
     def build_live_ducking_filter(self, output_hls: bool = True, output_rtmp: bool = False) -> tuple[str, str, str]:
         """Filter ducking interaktif untuk live alert mixing.
