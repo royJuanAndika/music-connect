@@ -18,6 +18,8 @@ jobs:
           script: |
             set -e
             cd /home/ubuntu/music-connect
-            git pull origin main
-            docker compose restart radio
+            git fetch origin main
+            git reset --hard origin/main
+            docker compose build radio
+            docker compose up -d radio
             docker top radio-stream-ai
