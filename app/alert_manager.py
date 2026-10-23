@@ -42,10 +42,26 @@ class AlertManager:
         self._is_running = False
 
     def start(self) -> None:
-        if not self._worker_task or self._worker_task.done():
-            self._is_running = True
-            self._worker_task = asyncio.create_task(self._process_alerts())
-            log.info("AlertManager worker started.")
+        """Menandai manager aktif. Worker task akan di-start saat event loop aktif."""
+        self._is_running = True
+        try:
+            loop = asyncio.get_running_loop()
+            if not self._worker_task or self._worker_task.done():
+                self._worker_task = loop.create_task(self._process_alerts())
+                log.info("AlertManager worker started.")
+        except RuntimeError:
+            # Belum ada running loop saat synchronous init, worker akan distart lazy saat enqueue pertama atau _post_init
+            pass
+
+    def ensure_worker(self) -> None:
+        """Memastikan worker running jika event loop sudah tersedia."""
+        if self._is_running and (not self._worker_task or self._worker_task.done()):
+            try:
+                loop = asyncio.get_running_loop()
+                self._worker_task = loop.create_task(self._process_alerts())
+                log.info("AlertManager worker started lazily.")
+            except RuntimeError:
+                pass
 
     async def stop(self) -> None:
         self._is_running = False
@@ -59,6 +75,7 @@ class AlertManager:
 
     async def enqueue_alert(self, requested_by: str, shoutout_to: str, message: str) -> None:
         """Memasukkan alert baru ke antrean live alert in-memory."""
+        self.ensure_worker()
         import time
         item = AlertItem(
             requested_by=requested_by,

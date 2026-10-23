@@ -95,6 +95,9 @@ async def _post_init(app: Application) -> None:
     # watchdog butuh Bot untuk notif
     watchdog.bot = app.bot
     watchdog.start()
+    alert_mgr = app.bot_data.get("alert_manager")
+    if alert_mgr:
+        alert_mgr.ensure_worker()
     app.bot_data["state_sync_task"] = asyncio.create_task(_watchdog_state_sync(app))
     _state["device_name"] = settings.device_name
     _state["ready"] = True
@@ -313,6 +316,7 @@ def main() -> None:
     app.bot_data["watchdog"] = watchdog
     app.bot_data["llm"] = llm
     app.bot_data["audio_engine"] = audio_engine
+    app.bot_data["alert_manager"] = alert_mgr
 
     # Register command handlers
     app.add_handler(CommandHandler(["start", "help"], h.cmd_start))
