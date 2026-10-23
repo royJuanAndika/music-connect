@@ -997,11 +997,8 @@ class Handlers:
                 elapsed = now - last_time
                 if elapsed < self.settings.message_cooldown_sec:
                     rem_sec = int(self.settings.message_cooldown_sec - elapsed)
-                    rem_min = rem_sec // 60
-                    rem_rem_sec = rem_sec % 60
-                    wait_text = f"{rem_min} menit {rem_rem_sec} detik" if rem_min > 0 else f"{rem_sec} detik"
                     return await update.message.reply_text(
-                        f"⏳ Harap tunggu *{wait_text}* sebelum mengirim `/pesan` berikutnya.",
+                        f"⏳ Pengiriman pesan dibatasi maks 1 pesan per menit. Harap tunggu *{rem_sec} detik* lagi.",
                         parse_mode=ParseMode.MARKDOWN,
                     )
 
