@@ -37,9 +37,15 @@ class AlertManager:
         self.audio_engine = audio_engine
         self.llm = llm
         self.tts = tts
-        self._queue: asyncio.Queue[AlertItem] = asyncio.Queue()
+        self._queue: Optional[asyncio.Queue[AlertItem]] = None
         self._worker_task: Optional[asyncio.Task] = None
         self._is_running = False
+
+    def _get_queue(self) -> asyncio.Queue[AlertItem]:
+        """Lazy inisialisasi queue pada event loop yang sedang aktif."""
+        if self._queue is None:
+            self._queue = asyncio.Queue()
+        return self._queue
 
     def start(self) -> None:
         """Menandai manager aktif. Worker task akan di-start saat event loop aktif."""
@@ -50,7 +56,6 @@ class AlertManager:
                 self._worker_task = loop.create_task(self._process_alerts())
                 log.info("AlertManager worker started.")
         except RuntimeError:
-            # Belum ada running loop saat synchronous init, worker akan distart lazy saat enqueue pertama atau _post_init
             pass
 
     def ensure_worker(self) -> None:
@@ -69,9 +74,10 @@ class AlertManager:
             self._worker_task.cancel()
             try:
                 await self._worker_task
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, RuntimeError):
                 pass
             self._worker_task = None
+        self._queue = None
 
     async def enqueue_alert(self, requested_by: str, shoutout_to: str, message: str) -> None:
         """Memasukkan alert baru ke antrean live alert in-memory."""
@@ -83,14 +89,16 @@ class AlertManager:
             message=message,
             created_at=time.time(),
         )
-        await self._queue.put(item)
+        q = self._get_queue()
+        await q.put(item)
         log.info(f"Alert diterima dari {requested_by} untuk {shoutout_to}: '{message[:30]}...'")
 
     async def _process_alerts(self) -> None:
         """Background loop pemroses alert secara FIFO real-time."""
+        q = self._get_queue()
         while self._is_running:
             try:
-                alert = await self._queue.get()
+                alert = await q.get()
                 log.info(f"Memproses live alert dari {alert.requested_by}...")
 
                 # 1. Generate naskah pesan singkat via LLM
@@ -124,9 +132,14 @@ class AlertManager:
                 else:
                     log.warning("File suara alert tidak valid / gagal digenerate.")
 
-                self._queue.task_done()
-            except asyncio.CancelledError:
+                q.task_done()
+            except (asyncio.CancelledError, GeneratorExit):
                 break
             except Exception as e:
+                if not self._is_running:
+                    break
                 log.error(f"Error pada loop AlertManager: {e}", exc_info=True)
-                await asyncio.sleep(1)
+                try:
+                    await asyncio.sleep(1)
+                except (asyncio.CancelledError, RuntimeError):
+                    break
